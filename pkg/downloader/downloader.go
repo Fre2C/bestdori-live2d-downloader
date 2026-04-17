@@ -79,13 +79,18 @@ func NewDownloader(apiClient *api.Client, tuiModel *tui.Model, program *tea.Prog
 // createDownloadRequest 创建下载请求
 // 参数:
 //   - ctx: 上下文
+//   - s: Bestdori 服务器配置
 //   - bundleFile: 资源包文件信息
 //
 // 返回:
 //   - *http.Request: HTTP请求
 //   - error: 错误信息
-func (d *Downloader) createDownloadRequest(ctx context.Context, bundleFile model.BundleFile) (*http.Request, error) {
-	url := fmt.Sprintf("%s/%s_rip/%s", config.Get().BaseAssetsURL, bundleFile.BundleName, bundleFile.FileName)
+func (d *Downloader) createDownloadRequest(
+	ctx context.Context,
+	s *config.AssetServerConfig,
+	bundleFile model.BundleFile,
+) (*http.Request, error) {
+	url := fmt.Sprintf("%s/%s_rip/%s", s.BaseAssetsURL, bundleFile.BundleName, bundleFile.FileName)
 	log.DefaultLogger.Info().Str("url", url).Msg("开始下载文件")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -173,6 +178,7 @@ func (d *Downloader) writeFileContent(file *os.File, resp *http.Response, filePa
 // DownloadBundleFile 下载资源包文件
 // 参数:
 //   - ctx: 上下文
+//   - s: Bestdori 服务器配置
 //   - bundleFile: 资源包文件信息
 //   - filePath: 保存路径
 //   - allowNotFound: 是否允许文件不存在（404错误时视为正常情况）
@@ -181,6 +187,7 @@ func (d *Downloader) writeFileContent(file *os.File, resp *http.Response, filePa
 //   - error: 错误信息
 func (d *Downloader) DownloadBundleFile(
 	ctx context.Context,
+	s *config.AssetServerConfig,
 	bundleFile model.BundleFile,
 	filePath string,
 	allowNotFound bool,
@@ -193,12 +200,13 @@ func (d *Downloader) DownloadBundleFile(
 	}
 
 	// 创建请求
-	req, err := d.createDownloadRequest(ctx, bundleFile)
+	req, err := d.createDownloadRequest(ctx, s, bundleFile)
 	if err != nil {
 		return err
 	}
 
 	// 执行请求
+	// #nosec G704 -- 请求的 URL 源自受控的服务器配置或构建逻辑，已在调用方/配置中受限
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		log.DefaultLogger.Error().Str("url", req.URL.String()).Err(err).Msg("下载文件失败")
@@ -235,17 +243,19 @@ func (d *Downloader) DownloadBundleFile(
 // Live2dBuilder 表示 Live2D 构建器
 // 负责构建完整的 Live2D 模型，包括下载所有必要文件.
 type Live2dBuilder struct {
-	path       string             // 模型保存路径
-	data       *model.BuildData   // 构建数据
-	model      *model.Live2dModel // Live2D 模型
-	dataPath   string             // 数据文件路径
-	downloader *Downloader        // 下载器实例
-	ModelName  string             // 模型名称
+	path       string                    // 模型保存路径
+	server     *config.AssetServerConfig // 模型所属 Bestdori 服务器
+	data       *model.BuildData          // 构建数据
+	model      *model.Live2dModel        // Live2D 模型
+	dataPath   string                    // 数据文件路径
+	downloader *Downloader               // 下载器实例
+	ModelName  string                    // 模型名称
 }
 
 // NewLive2dBuilder 创建新的 Live2D 构建器实例
 // 参数:
 //   - path: 模型保存路径
+//   - server: Bestdori 服务器配置
 //   - buildData: 构建数据
 //   - downloader: 下载器实例
 //   - modelName: 模型名称
@@ -254,12 +264,14 @@ type Live2dBuilder struct {
 //   - *Live2dBuilder: 新的 Live2D 构建器实例
 func NewLive2dBuilder(
 	path string,
+	server *config.AssetServerConfig,
 	buildData *model.BuildData,
 	downloader *Downloader,
 	modelName string,
 ) *Live2dBuilder {
 	return &Live2dBuilder{
 		path:       path,
+		server:     server,
 		data:       buildData,
 		model:      &model.Live2dModel{Motions: make(map[string][]model.MotionFile)},
 		dataPath:   filepath.Join(path, "data"),
@@ -285,7 +297,13 @@ func (b *Live2dBuilder) ProcessFile(
 	allowNotFound bool,
 ) (string, error) {
 	if _, statErr := os.Stat(filePath); os.IsNotExist(statErr) {
-		if downloadErr := b.downloader.DownloadBundleFile(ctx, bundleFile, filePath, allowNotFound); downloadErr != nil {
+		if downloadErr := b.downloader.DownloadBundleFile(
+			ctx,
+			b.server,
+			bundleFile,
+			filePath,
+			allowNotFound,
+		); downloadErr != nil {
 			return "", fmt.Errorf("下载文件失败: %w", downloadErr)
 		}
 	}
@@ -521,7 +539,13 @@ func (b *Live2dBuilder) startWorkerPool(ctx context.Context, taskChan chan downl
 					errorChan <- errors.New("下载已取消")
 					return
 				default:
-					if downloadErr := b.downloader.DownloadBundleFile(ctx, task.bundleFile, task.filePath, task.allowNotFound); downloadErr != nil {
+					if downloadErr := b.downloader.DownloadBundleFile(
+						ctx,
+						b.server,
+						task.bundleFile,
+						task.filePath,
+						task.allowNotFound,
+					); downloadErr != nil {
 						task.result <- downloadResult{err: fmt.Errorf("下载文件失败: %w", downloadErr)}
 						continue
 					}

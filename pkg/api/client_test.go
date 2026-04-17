@@ -2,7 +2,10 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +15,53 @@ import (
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/log"
 	"github.com/stretchr/testify/require"
 )
+
+func setupLive2dAssetsTestClient(
+	t *testing.T,
+	assetServers map[string]map[string]any,
+) *api.Client {
+	t.Helper()
+
+	config.Init()
+	cfg := config.Get()
+	cfg.ServerTags = make([]string, 0, len(assetServers))
+	cfg.AssetServers = make(map[string]config.AssetServerConfig, len(assetServers))
+
+	mux := http.NewServeMux()
+	for tag, costumes := range assetServers {
+		cfg.ServerTags = append(cfg.ServerTags, tag)
+		cfg.AssetServers[tag] = config.AssetServerConfig{
+			BaseAssetsURL:  "https://example.invalid/assets/" + tag,
+			AssetsIndexURL: "http://example.invalid/" + tag + "/assets/_info.json",
+		}
+
+		response := map[string]any{
+			"live2d": map[string]any{
+				"chara": costumes,
+			},
+		}
+
+		path := "/" + tag + "/assets/_info.json"
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Errorf("encode %s response: %v", path, err)
+			}
+		})
+	}
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	for tag, serverCfg := range cfg.AssetServers {
+		serverCfg.AssetsIndexURL = server.URL + "/" + tag + "/assets/_info.json"
+		cfg.AssetServers[tag] = serverCfg
+	}
+
+	client := api.NewClient()
+	client.SetUseCharaCache(false)
+	client.SetCharaCachePath(t.TempDir())
+	return client
+}
 
 // setupTest 设置测试环境.
 func setupTest(t *testing.T) {
@@ -222,4 +272,100 @@ func TestValidateLive2dModel(t *testing.T) {
 			require.Equal(t, tt.wantExists, exists, "ValidateLive2dModel() should return correct existence status")
 		})
 	}
+}
+
+func TestGetCharaCostumesIncludesTwoPartCostumes(t *testing.T) {
+	client := setupLive2dAssetsTestClient(t, map[string]map[string]any{
+		"jp": {
+			"001_arbeit":       map[string]any{},
+			"001_live_default": map[string]any{},
+			"002_cafe":         map[string]any{},
+		},
+	})
+
+	costumes, err := client.GetCharaCostumes(context.Background(), 1)
+
+	require.NoError(t, err)
+	require.Len(t, costumes, 2)
+	require.Equal(t, "001_arbeit", costumes[0].Costume)
+	require.Equal(t, "001_live_default", costumes[1].Costume)
+}
+
+func TestGetCharaCostumesMatchesLeadingCharaIDOnly(t *testing.T) {
+	client := setupLive2dAssetsTestClient(t, map[string]map[string]any{
+		"jp": {
+			"001_event_102_story_01": map[string]any{},
+			"102_school":             map[string]any{},
+		},
+	})
+
+	costumes, err := client.GetCharaCostumes(context.Background(), 102)
+
+	require.NoError(t, err)
+	require.Len(t, costumes, 1)
+	require.Equal(t, "102_school", costumes[0].Costume)
+}
+
+func TestGetCharaCostumesIncludesBiliSpecialCostumes(t *testing.T) {
+	client := setupLive2dAssetsTestClient(t, map[string]map[string]any{
+		"jp": {
+			"001_school":           map[string]any{},
+			"bili_001_collabo_r":   map[string]any{},
+			"bili_002_collabo_ssr": map[string]any{},
+		},
+	})
+
+	costumes, err := client.GetCharaCostumes(context.Background(), 1)
+
+	require.NoError(t, err)
+	require.Len(t, costumes, 2)
+	require.Equal(t, "bili_001_collabo_r", costumes[0].Costume)
+	require.Equal(t, "001_school", costumes[1].Costume)
+}
+
+func TestGetCharaCostumesIgnoresUnsupportedBilPrefix(t *testing.T) {
+	client := setupLive2dAssetsTestClient(t, map[string]map[string]any{
+		"jp": {
+			"001_school":          map[string]any{},
+			"bil_001_collabo_ssr": map[string]any{},
+		},
+	})
+
+	costumes, err := client.GetCharaCostumes(context.Background(), 1)
+
+	require.NoError(t, err)
+	require.Len(t, costumes, 1)
+	require.Equal(t, "001_school", costumes[0].Costume)
+}
+
+func TestGetLive2dAssetReturnsSourceServer(t *testing.T) {
+	client := setupLive2dAssetsTestClient(t, map[string]map[string]any{
+		"jp": {},
+		"cn": {
+			"037_casual-2023": map[string]any{},
+		},
+	})
+
+	asset, exists, err := client.GetLive2dAsset(context.Background(), "037_casual-2023")
+
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.NotNil(t, asset)
+	require.Equal(t, "cn", asset.Server)
+	require.Equal(t, "037_casual-2023", asset.Costume)
+}
+
+func TestGetDefaultAssetServerHonorsConfigDefault(t *testing.T) {
+	config.Init()
+	cfg := config.Get()
+	cfg.DefaultAssetServer = "cn"
+	cfg.ServerTags = []string{"jp", "cn"}
+	cfg.AssetServers = map[string]config.AssetServerConfig{
+		"jp": config.DefaultAssetServerConfigTemplate("jp"),
+		"cn": config.DefaultAssetServerConfigTemplate("cn"),
+	}
+
+	client := api.NewClient()
+
+	require.Equal(t, "cn", client.GetDefaultAssetServer())
 }

@@ -2,7 +2,11 @@
 // 包括资源包文件、构建数据、动作文件、表情文件等类型
 package model
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // BundleFile 表示资源包文件
 // 用于描述从 Bestdori 下载的资源文件信息.
@@ -70,6 +74,53 @@ type Data struct {
 	Textures       []string                `json:"textures"`
 	Motions        map[string][]MotionFile `json:"motions"`
 	Expressions    []ExpressionFile        `json:"expressions"`
+}
+
+// Live2dAsset 表示 Live2D 模型资源信息
+// 用于存储资源映射及其所属服务器.
+type Live2dAsset struct {
+	Server  string
+	Costume string
+}
+
+func (l *Live2dAsset) String() string {
+	return fmt.Sprintf("%s (%s)", l.Costume, l.Server)
+}
+
+func sortableCostumeName(name string) string {
+	parts := strings.Split(name, "_")
+	if len(parts) >= 3 && parts[0] == "bili" {
+		if _, err := strconv.Atoi(parts[1]); err == nil {
+			return strings.Join(parts[1:], "_")
+		}
+	}
+
+	return name
+}
+
+// CostumeLess 比较两个 Live2dAsset 的排序优先级 (用于排序).
+func CostumeLess(a, b Live2dAsset) bool {
+	aName := sortableCostumeName(a.Costume)
+	bName := sortableCostumeName(b.Costume)
+
+	// 如果包含 "live_event", 将其排在后面
+	aHasEvent := strings.Contains(aName, "live_event")
+	bHasEvent := strings.Contains(bName, "live_event")
+	if aHasEvent != bHasEvent {
+		return !aHasEvent
+	}
+
+	aParts := strings.Split(aName, "_")
+	bParts := strings.Split(bName, "_")
+	if len(aParts) > 1 && len(bParts) > 1 {
+		aID, aErr := strconv.Atoi(aParts[1])
+		bID, bErr := strconv.Atoi(bParts[1])
+		if aErr == nil && bErr == nil {
+			return aID < bID
+		}
+	}
+
+	return aName < bName
 }
 
 // MatchChara 表示匹配的角色信息
