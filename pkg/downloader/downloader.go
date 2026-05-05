@@ -224,16 +224,26 @@ func (d *Downloader) DownloadBundleFile(
 		return nil
 	}
 
-	// 创建文件和目录
-	file, createErr := d.createFileAndDirectory(filePath)
+	// 创建临时文件和目录
+	tempFilePath := filePath + ".tmp"
+	tempFile, createErr := d.createFileAndDirectory(tempFilePath)
 	if createErr != nil {
 		return createErr
 	}
-	defer file.Close()
 
 	// 写入文件内容
-	if writeErr := d.writeFileContent(file, resp, filePath); writeErr != nil {
+	if writeErr := func() error {
+		defer tempFile.Close()
+		return d.writeFileContent(tempFile, resp, tempFilePath)
+	}(); writeErr != nil {
+		_ = os.Remove(tempFilePath)
 		return writeErr
+	}
+
+	// 重命名为目标文件
+	if renameErr := os.Rename(tempFilePath, filePath); renameErr != nil {
+		_ = os.Remove(tempFilePath)
+		return renameErr
 	}
 
 	log.DefaultLogger.Info().Str("filePath", filePath).Msg("文件下载完成")
