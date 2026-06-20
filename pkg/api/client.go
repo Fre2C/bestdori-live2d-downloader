@@ -86,6 +86,8 @@ func (c *Client) readCacheData(cacheFile string) (map[string]any, error) {
 // 返回:
 //   - map[string]any: 获取的数据
 //   - error: 错误信息
+//
+//nolint:gocognit // 复杂的数据获取和缓存逻辑
 func (c *Client) FetchData(ctx context.Context, url string, cache string) (map[string]any, error) {
 	if c.useCharaCache && cache != "" {
 		cacheFile := filepath.Join(c.charaCachePath, cache)
@@ -214,7 +216,14 @@ func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, erro
 // CharacterInfo 表示角色信息.
 type CharacterInfo = model.CharacterInfo
 
+// 服装类型常量.
+const (
+	costumePajamas   = "pajamas"
+	costumeHalloween = "万圣节"
+)
+
 // defaultCharaColors 没有颜色代码的角色的默认颜色映射.
+//
 //nolint:gochecknoglobals // 全局变量，用于存储角色默认颜色
 var defaultCharaColors = map[int]string{
 	601: "#DD33CC", // 奥泽美咲 (Michelle 真人形态)
@@ -261,7 +270,7 @@ func (c *Client) GetCharacterInfoList(ctx context.Context) ([]CharacterInfo, err
 
 		// 为没有颜色的角色添加硬编码颜色
 		if colorCode == "" {
-			if fallback, ok := defaultCharaColors[id]; ok {
+			if fallback, hasDefault := defaultCharaColors[id]; hasDefault {
 				colorCode = fallback
 			}
 		}
@@ -297,7 +306,7 @@ type CostumeNameInfo struct {
 //   - map[string]*CostumeNameInfo: Live2D服装名到多语言名称信息的映射
 //   - error: 错误信息
 //
-//nolint:gocognit // 复杂的多语言映射逻辑
+//nolint:gocognit,gocyclo,cyclop,funlen // 复杂的多语言映射逻辑
 func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNameInfo, error) {
 	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
 	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
@@ -356,30 +365,30 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 		if parseErr != nil || charaID > 1000 {
 			continue
 		}
-		charaInfo, ok := info.(map[string]any)
-		if !ok {
+		charaInfo, charaOk := info.(map[string]any)
+		if !charaOk {
 			continue
 		}
-		seasonMap, ok := charaInfo["seasonCostumeListMap"].(map[string]any)
-		if !ok {
+		seasonMap, seasonMapOk := charaInfo["seasonCostumeListMap"].(map[string]any)
+		if !seasonMapOk {
 			continue
 		}
-		entries, ok := seasonMap["entries"].(map[string]any)
-		if !ok {
+		entries, entriesOk := seasonMap["entries"].(map[string]any)
+		if !entriesOk {
 			continue
 		}
 		for _, season := range entries {
-			seasonData, ok := season.(map[string]any)
-			if !ok {
+			seasonData, seasonOk := season.(map[string]any)
+			if !seasonOk {
 				continue
 			}
-			costumeEntries, ok := seasonData["entries"].([]any)
-			if !ok {
+			costumeEntries, costumeOk := seasonData["entries"].([]any)
+			if !costumeOk {
 				continue
 			}
 			for _, entry := range costumeEntries {
-				entryData, ok := entry.(map[string]any)
-				if !ok {
+				entryData, entryOk := entry.(map[string]any)
+				if !entryOk {
 					continue
 				}
 				live2dName, _ := entryData["live2dAssetBundleName"].(string)
@@ -400,7 +409,7 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 	eventNames := make(map[int]string)
 	eventsURL := "https://bestdori.com/api/events/all.5.json"
 	eventsData, eventsErr := c.FetchData(ctx, eventsURL, "events_all_5.json")
-	if eventsErr == nil {
+	if eventsErr == nil { //nolint:nestif // 复杂的事件数据处理
 		for eventIDStr, info := range eventsData {
 			eventID, parseErr := strconv.Atoi(eventIDStr)
 			if parseErr != nil {
@@ -468,7 +477,7 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 //   - map[string]string: Live2D服装名到中文描述的映射
 //   - error: 错误信息
 //
-//nolint:gocognit // 复杂的多语言映射逻辑
+//nolint:gocognit,gocyclo,cyclop,funlen // 复杂的多语言映射逻辑
 func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error) {
 	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
 	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
@@ -523,30 +532,30 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 		if parseErr != nil || charaID > 1000 {
 			continue
 		}
-		charaInfo, ok := info.(map[string]any)
-		if !ok {
+		charaInfo, charaOk := info.(map[string]any)
+		if !charaOk {
 			continue
 		}
-		seasonMap, ok := charaInfo["seasonCostumeListMap"].(map[string]any)
-		if !ok {
+		seasonMap, seasonMapOk := charaInfo["seasonCostumeListMap"].(map[string]any)
+		if !seasonMapOk {
 			continue
 		}
-		entries, ok := seasonMap["entries"].(map[string]any)
-		if !ok {
+		entries, entriesOk := seasonMap["entries"].(map[string]any)
+		if !entriesOk {
 			continue
 		}
 		for _, season := range entries {
-			seasonData, ok := season.(map[string]any)
-			if !ok {
+			seasonData, seasonOk := season.(map[string]any)
+			if !seasonOk {
 				continue
 			}
-			costumeEntries, ok := seasonData["entries"].([]any)
-			if !ok {
+			costumeEntries, costumeOk := seasonData["entries"].([]any)
+			if !costumeOk {
 				continue
 			}
 			for _, entry := range costumeEntries {
-				entryData, ok := entry.(map[string]any)
-				if !ok {
+				entryData, entryOk := entry.(map[string]any)
+				if !entryOk {
 					continue
 				}
 				live2dName, _ := entryData["live2dAssetBundleName"].(string)
@@ -569,7 +578,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 	eventNames := make(map[int]string)
 	eventsURL := "https://bestdori.com/api/events/all.5.json"
 	eventsData, eventsErr := c.FetchData(ctx, eventsURL, "events_all_5.json")
-	if eventsErr == nil {
+	if eventsErr == nil { //nolint:nestif // 复杂的事件数据处理
 		for eventIDStr, info := range eventsData {
 			eventID, parseErr := strconv.Atoi(eventIDStr)
 			if parseErr != nil {
@@ -623,7 +632,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 	return names, nil
 }
 
-// translateVariant 翻译服装变体后缀
+// translateVariant 翻译服装变体后缀.
 func translateVariant(variant string) string {
 	variants := map[string]string{
 		"penlight": "荧光棒",
@@ -639,93 +648,93 @@ func translateVariant(variant string) string {
 // translateCostumeSuffix 根据后缀模式翻译服装名称
 // 优先级：精确匹配 > 模式匹配 > 年份组合匹配
 //
-//nolint:gocognit // 复杂的模式匹配逻辑
+//nolint:gocognit,gocyclo,cyclop,funlen // 复杂的模式匹配逻辑
 func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	// 1. 精确匹配表
 	exactMatches := map[string]string{
 		// 基础通用服
-		"casual":               "常服",
-		"casual_summer":        "夏季常服",
-		"casual_winter":        "冬季常服",
+		"casual":                 "常服",
+		"casual_summer":          "夏季常服",
+		"casual_winter":          "冬季常服",
 		"casual_winter-sunglass": "常服(冬·墨镜)",
-		"casual_v3":            "常服v3",
-		"school":               "校服",
-		"school_winter":        "冬服",
-		"school_winter_2":      "冬服2",
-		"school_winter_s2":     "冬服s2",
-		"school_winter_v3":     "冬服v3",
-		"school_summer":        "夏服",
-		"school_summer_s2":     "夏服s2",
-		"school_summer_v3":     "夏服v3",
-		"school_armband":       "校服(臂章)",
-		"jh_school_winter":     "初中冬服",
-		"uniform":              "制服",
-		"default":              "默认",
-		"general":              "通用",
+		"casual_v3":              "常服v3",
+		"school":                 "校服",
+		"school_winter":          "冬服",
+		"school_winter_2":        "冬服2",
+		"school_winter_s2":       "冬服s2",
+		"school_winter_v3":       "冬服v3",
+		"school_summer":          "夏服",
+		"school_summer_s2":       "夏服s2",
+		"school_summer_v3":       "夏服v3",
+		"school_armband":         "校服(臂章)",
+		"jh_school_winter":       "初中冬服",
+		"uniform":                "制服",
+		"default":                "默认",
+		"general":                "通用",
 
 		// 场景/职业/运动服
-		"gym_clothes":          "体操服",
-		"tracksuit":            "运动服",
-		"pajamas":              "睡衣",
-		"swimsuit":             "泳装",
-		"swim_swit":            "泳装",
-		"apron":                "围裙",
-		"cafe":                 "咖啡厅制服",
-		"fast_food":            "快餐店制服",
-		"arbeit":               "打工服",
-		"store":                "店员服",
-		"chairperson_casual":   "学生会长服",
-		"practice_clothes":     "练习服",
-		"stage_costume":        "舞台服装",
-		"wd_practice":          "白色情人节练习服",
-		"garupa_t":             "Garupa T恤",
+		"gym_clothes":            "体操服",
+		"tracksuit":              "运动服",
+		"pajamas":                costumePajamas,
+		"swimsuit":               "泳装",
+		"swim_swit":              "泳装",
+		"apron":                  "围裙",
+		"cafe":                   "咖啡厅制服",
+		"fast_food":              "快餐店制服",
+		"arbeit":                 "打工服",
+		"store":                  "店员服",
+		"chairperson_casual":     "学生会长服",
+		"practice_clothes":       "练习服",
+		"stage_costume":          "舞台服装",
+		"wd_practice":            "白色情人节练习服",
+		"garupa_t":               "Garupa T恤",
 		"memorial_middle_school": "纪念中学制服",
 
 		// 节日/纪念服
-		"af":                   "愚人节",
-		"xmas":                 "圣诞",
-		"hw":                   "万圣节",
-		"halloween":            "万圣节",
+		"af":                        "愚人节",
+		"xmas":                      "圣诞",
+		"hw":                        costumeHalloween,
+		"halloween":                 costumeHalloween,
 		"halloween_without_lantern": "万圣节(无灯)",
-		"furisode":             "振袖",
-		"yukata":               "浴衣",
-		"anniv":                "周年纪念",
-		"special_5th":          "5周年纪念",
-		"girlparty2019":        "女子聚会2019",
-		"precious_summer":      "珍贵夏日",
-		"anime_live":           "动画Live",
-		"popipa_fes":           "Popipa祭典",
-		"kirameki_festival":    "闪光祭典",
-		"kirameki_festival_coat": "闪光祭典(外套)",
+		"furisode":                  "振袖",
+		"yukata":                    "浴衣",
+		"anniv":                     "周年纪念",
+		"special_5th":               "5周年纪念",
+		"girlparty2019":             "女子聚会2019",
+		"precious_summer":           "珍贵夏日",
+		"anime_live":                "动画Live",
+		"popipa_fes":                "Popipa祭典",
+		"kirameki_festival":         "闪光祭典",
+		"kirameki_festival_coat":    "闪光祭典(外套)",
 
 		// 剧情/舞台服
-		"chapter0_live":        "序章Live",
-		"chapter0_pajamas":     "序章睡衣",
-		"romeo":                "罗密欧",
-		"juliet":               "朱丽叶",
+		"chapter0_live":    "序章Live",
+		"chapter0_pajamas": "序章睡衣",
+		"romeo":            "罗密欧",
+		"juliet":           "朱丽叶",
 
 		// 特殊联动/企划
-		"michelle":             "米歇尔(兔子玩偶服)",
-		"michelle_ranger":      "米歇尔·游侠(兔子玩偶服)",
-		"miko":                 "巫女服",
-		"fantasy":              "幻想/异世界主题",
-		"fantasy_01":           "幻想01",
-		"delta":                "Delta变体服",
-		"expose":               "《EXPOSE》演出服",
-		"ranger":               "游侠服",
-		"chispa":               "CHiSPA乐队服",
-		"sumimi":               "Sumimi企划服",
-		"nfo01":                "《NFO》游戏内Avatar服",
-		"boss":                 "Boss服",
-		"robot":                "机器人服",
+		"michelle":        "米歇尔(兔子玩偶服)",
+		"michelle_ranger": "米歇尔·游侠(兔子玩偶服)",
+		"miko":            "巫女服",
+		"fantasy":         "幻想/异世界主题",
+		"fantasy_01":      "幻想01",
+		"delta":           "Delta变体服",
+		"expose":          "《EXPOSE》演出服",
+		"ranger":          "游侠服",
+		"chispa":          "CHiSPA乐队服",
+		"sumimi":          "Sumimi企划服",
+		"nfo01":           "《NFO》游戏内Avatar服",
+		"boss":            "Boss服",
+		"robot":           "机器人服",
 
 		// 系统基础服
-		"live_default":         "初始打歌服",
-		"live_practice":        "练习服",
-		"live_sr_01":           "Live SR",
-		"live_ssr_01":          "Live SSR",
-		"vocal_limited_sr":     "Vocal限定SR",
-		"vocal_limited_ssr":    "Vocal限定SSR",
+		"live_default":      "初始打歌服",
+		"live_practice":     "练习服",
+		"live_sr_01":        "Live SR",
+		"live_ssr_01":       "Live SSR",
+		"vocal_limited_sr":  "Vocal限定SR",
+		"vocal_limited_ssr": "Vocal限定SSR",
 	}
 
 	if name, ok := exactMatches[suffix]; ok {
@@ -768,11 +777,11 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	if matches := regexp.MustCompile(`^chapter(\d+)_(.+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
 		chapterNum := matches[1]
 		costumeType := matches[2]
-		typeName := ""
+		var typeName string
 		switch costumeType {
 		case "live":
 			typeName = "Live"
-		case "pajamas":
+		case costumePajamas:
 			typeName = "睡衣"
 		default:
 			typeName = costumeType
@@ -852,12 +861,12 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	// 初音联动：miku_XXX
 	if strings.HasPrefix(suffix, "miku_") {
 		mikuSongs := map[string]string{
-			"miku_shinkai":    "深海少女",
-			"miku_migikata":   "右肩之蝶",
-			"miku_rettou":     "左肩之蝶",
-			"miku_alien":      "Alien Alien",
-			"miku_lostone":    "Lost One的号哭",
-			"miku_romecin":    "罗密欧与辛德瑞拉",
+			"miku_shinkai":      "深海少女",
+			"miku_migikata":     "右肩之蝶",
+			"miku_rettou":       "左肩之蝶",
+			"miku_alien":        "Alien Alien",
+			"miku_lostone":      "Lost One的号哭",
+			"miku_romecin":      "罗密欧与辛德瑞拉",
 			"miku_nocturnality": "夜之蝶",
 		}
 		if name, ok := mikuSongs[suffix]; ok {
@@ -879,10 +888,10 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	baseCostumes := map[string]string{
 		"casual":      "常服",
 		"school":      "校服",
-		"pajamas":     "睡衣",
+		"pajamas":     costumePajamas,
 		"swimsuit":    "泳装",
 		"yukata":      "浴衣",
-		"halloween":   "万圣节",
+		"halloween":   costumeHalloween,
 		"christmas":   "圣诞",
 		"furisode":    "振袖",
 		"arbeit":      "打工服",

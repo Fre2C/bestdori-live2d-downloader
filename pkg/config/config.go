@@ -17,8 +17,8 @@ type AssetServerConfig struct {
 type NamingMode int
 
 const (
-	NamingModeChinese NamingMode = iota // 使用中文命名
-	NamingModeOriginal                  // 使用原始文件名
+	NamingModeChinese  NamingMode = iota // 使用中文命名
+	NamingModeOriginal                   // 使用原始文件名
 )
 
 // Config 表示程序的配置结构.

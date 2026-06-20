@@ -44,6 +44,9 @@ const (
 	StateLoading     = "loading"     // 加载状态
 	StateDownloading = "downloading" // 下载状态
 	KeyEsc           = "esc"         // ESC 键
+	KeyEnter         = "enter"       // Enter 键
+	KeyUp            = "up"          // 上箭头键
+	KeyDown          = "down"        // 下箭头键
 )
 
 // progressMsg 表示进度更新消息.
@@ -144,34 +147,34 @@ func (i charaListItem) FilterValue() string { return i.name }
 // Model 表示 TUI 模型
 // 包含所有 UI 组件和状态.
 type Model struct {
-	Items            map[string]*DownloadItem  // 下载项映射，key 为项目名称，value 为下载项
-	ItemOrder        []string                  // 下载项顺序列表
-	Width            int                       // 界面宽度
-	Quitting         bool                      // 是否正在退出程序
-	TextInput        textinput.Model           // 文本输入框组件
-	CharaList        list.Model                // 角色列表组件
-	Live2dList       list.Model                // Live2D 列表组件
-	DownloadList     list.Model                // 下载列表组件
-	SelectedIDs      []int                     // 选中的项目 ID 列表
-	State            string                    // 当前状态
-	SearchChan       chan string                // 搜索通道，用于处理搜索请求
-	SelectChan       chan []*SelectedItem       // 选择通道，用于处理选择请求
-	CharaSelectChan  chan int                   // 角色选择通道
-	Spinner          spinner.Model             // 加载动画组件
-	CurrentCharaID   int                       // 当前角色ID
-	CurrentCharaName string                    // 当前角色名称
-	ExtraCharaName   string                    // 额外角色名称
-	program          *tea.Program              // TUI 程序实例
-	cancelChan       chan struct{}             // 取消通道，用于取消操作
-	Ctx              context.Context           // 上下文，用于控制操作的生命周期
-	Cancel           context.CancelFunc        // 取消函数，用于取消上下文
-	ErrorMessage     string                    // 错误消息
-	TotalModels      int                       // 总模型数量
-	CompletedModels  int                       // 已完成的模型数量
-	NamingMode       config.NamingMode         // 文件夹命名模式
-	IsFiltering      bool                      // 是否处于搜索过滤模式
-	FilterInput      textinput.Model           // 搜索输入框
-	AllCostumeItems  []list.Item               // 所有服装列表项（过滤前）
+	Items            map[string]*DownloadItem // 下载项映射，key 为项目名称，value 为下载项
+	ItemOrder        []string                 // 下载项顺序列表
+	Width            int                      // 界面宽度
+	Quitting         bool                     // 是否正在退出程序
+	TextInput        textinput.Model          // 文本输入框组件
+	CharaList        list.Model               // 角色列表组件
+	Live2dList       list.Model               // Live2D 列表组件
+	DownloadList     list.Model               // 下载列表组件
+	SelectedIDs      []int                    // 选中的项目 ID 列表
+	State            string                   // 当前状态
+	SearchChan       chan string              // 搜索通道，用于处理搜索请求
+	SelectChan       chan []*SelectedItem     // 选择通道，用于处理选择请求
+	CharaSelectChan  chan int                 // 角色选择通道
+	Spinner          spinner.Model            // 加载动画组件
+	CurrentCharaID   int                      // 当前角色ID
+	CurrentCharaName string                   // 当前角色名称
+	ExtraCharaName   string                   // 额外角色名称
+	program          *tea.Program             // TUI 程序实例
+	cancelChan       chan struct{}            // 取消通道，用于取消操作
+	Ctx              context.Context          // 上下文，用于控制操作的生命周期
+	Cancel           context.CancelFunc       // 取消函数，用于取消上下文
+	ErrorMessage     string                   // 错误消息
+	TotalModels      int                      // 总模型数量
+	CompletedModels  int                      // 已完成的模型数量
+	NamingMode       config.NamingMode        // 文件夹命名模式
+	IsFiltering      bool                     // 是否处于搜索过滤模式
+	FilterInput      textinput.Model          // 搜索输入框
+	AllCostumeItems  []list.Item              // 所有服装列表项（过滤前）
 }
 
 // DownloadDelegate 用于下载进度列表的代理
@@ -291,10 +294,10 @@ type CostumeNameInfo struct {
 
 // UpdateListMsg 表示更新列表消息.
 type UpdateListMsg struct {
-	Items           []*model.Live2dAsset       // 列表项
-	CostumeNames    map[string]string          // 服装中文名映射（用于显示）
+	Items           []*model.Live2dAsset        // 列表项
+	CostumeNames    map[string]string           // 服装中文名映射（用于显示）
 	CostumeNameInfo map[string]*CostumeNameInfo // 服装多语言信息（用于搜索）
-	CharaID         int                        // 角色ID
+	CharaID         int                         // 角色ID
 }
 
 // UpdateDownloadListMsg 表示更新下载列表消息.
@@ -315,7 +318,7 @@ type UpdateCharaListMsg struct {
 
 // handleInputState 处理输入状态下的消息.
 func (m *Model) handleInputState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "enter" {
+	if msg.String() == KeyEnter {
 		value := strings.TrimSpace(m.TextInput.Value())
 		if value == "" {
 			m.SetError("请输入 Live2D 模型名称")
@@ -373,7 +376,7 @@ func (m *Model) handleListState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.toggleItemSelection(i)
 			}
 			return m, nil
-		case "up", "down":
+		case KeyUp, KeyDown:
 			// 在过滤模式下也可以导航
 			var cmd tea.Cmd
 			m.Live2dList, cmd = m.Live2dList.Update(msg)
@@ -413,17 +416,17 @@ func (m *Model) handleListState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.handleSelectAll()
 	case "n":
 		m.toggleNamingMode()
-	case "up":
+	case KeyUp:
 		if m.Live2dList.Index() == 0 && len(m.Live2dList.Items()) > 0 {
 			m.Live2dList.Select(len(m.Live2dList.Items()) - 1)
 			return m, nil
 		}
-	case "down":
+	case KeyDown:
 		if m.Live2dList.Index() == len(m.Live2dList.Items())-1 && len(m.Live2dList.Items()) > 0 {
 			m.Live2dList.Select(0)
 			return m, nil
 		}
-	case "enter":
+	case KeyEnter:
 		return m.handleListEnter()
 	case KeyEsc:
 		m.State = StateCharaList
@@ -563,7 +566,7 @@ func (m *Model) handleListEnter() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// getDisplayName 获取服装的显示名称（根据当前命名模式）
+// getDisplayName 获取服装的显示名称（根据当前命名模式）.
 func (m *Model) getDisplayName(asset *model.Live2dAsset) string {
 	if asset == nil {
 		return ""
@@ -580,7 +583,7 @@ func (m *Model) getDisplayName(asset *model.Live2dAsset) string {
 	return asset.String()
 }
 
-// GetDisplayName 获取服装的显示名称（公开方法）
+// GetDisplayName 获取服装的显示名称（公开方法）.
 func (m *Model) GetDisplayName(asset *model.Live2dAsset) string {
 	return m.getDisplayName(asset)
 }
@@ -614,6 +617,8 @@ func (m *Model) handleDownloadingState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleUpdateListMsg 处理更新列表消息.
+//
+//nolint:gocognit // 复杂的列表更新逻辑
 func (m *Model) handleUpdateListMsg(msg UpdateListMsg) (tea.Model, tea.Cmd) {
 	m.CurrentCharaID = msg.CharaID
 	listItems := make([]list.Item, len(msg.Items))
@@ -852,6 +857,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// View 渲染 TUI 界面.
+//
+//nolint:gocognit,funlen // 复杂的界面渲染逻辑
 func (m *Model) View() string {
 	if m.Quitting {
 		return "\n  下载已取消\n\n"

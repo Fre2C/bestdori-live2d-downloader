@@ -637,7 +637,7 @@ func (b *Live2dBuilder) setupDownloadEnvironment() (context.Context, error) {
 	return ctx, nil
 }
 
-// getDisplayName 获取显示名称（优先使用翻译名）
+// getDisplayName 获取显示名称（优先使用翻译名）.
 func (b *Live2dBuilder) getDisplayName() string {
 	if b.DisplayName != "" {
 		return b.DisplayName
