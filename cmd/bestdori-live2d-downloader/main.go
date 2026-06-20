@@ -278,6 +278,8 @@ func (a *App) getLive2dPathOriginal(live2dName string, charaID int, costume stri
 }
 
 // findExistingModelPath 查找已存在的模型目录（支持不同命名模式）
+//
+//nolint:gocognit // 复杂的路径查找逻辑
 func (a *App) findExistingModelPath(live2dName string, currentPath string) (string, bool) {
 	// 检查当前路径是否存在完整模型
 	if _, err := os.Stat(filepath.Join(currentPath, "model.json")); err == nil {

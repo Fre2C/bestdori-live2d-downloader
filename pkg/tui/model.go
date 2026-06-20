@@ -349,6 +349,8 @@ func (m *Model) handleLoadingState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleListState 处理列表状态下的消息.
+//
+//nolint:funlen // 包含多种状态处理
 func (m *Model) handleListState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 过滤模式处理
 	if m.IsFiltering {

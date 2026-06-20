@@ -215,6 +215,7 @@ func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, erro
 type CharacterInfo = model.CharacterInfo
 
 // defaultCharaColors 没有颜色代码的角色的默认颜色映射.
+//nolint:gochecknoglobals // 全局变量，用于存储角色默认颜色
 var defaultCharaColors = map[int]string{
 	601: "#DD33CC", // 奥泽美咲 (Michelle 真人形态)
 }
@@ -295,6 +296,8 @@ type CostumeNameInfo struct {
 // 返回:
 //   - map[string]*CostumeNameInfo: Live2D服装名到多语言名称信息的映射
 //   - error: 错误信息
+//
+//nolint:gocognit // 复杂的多语言映射逻辑
 func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNameInfo, error) {
 	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
 	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
@@ -464,6 +467,8 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 // 返回:
 //   - map[string]string: Live2D服装名到中文描述的映射
 //   - error: 错误信息
+//
+//nolint:gocognit // 复杂的多语言映射逻辑
 func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error) {
 	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
 	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
@@ -633,6 +638,8 @@ func translateVariant(variant string) string {
 
 // translateCostumeSuffix 根据后缀模式翻译服装名称
 // 优先级：精确匹配 > 模式匹配 > 年份组合匹配
+//
+//nolint:gocognit // 复杂的模式匹配逻辑
 func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	// 1. 精确匹配表
 	exactMatches := map[string]string{
