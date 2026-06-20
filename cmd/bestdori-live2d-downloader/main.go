@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/config"
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/downloader"
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/log"
-	"github.com/A-kirami/bestdori-live2d-downloader/pkg/matcher"
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/model"
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/tui"
 
@@ -26,38 +26,23 @@ const (
 	// SplitPartsCount 表示字符串分割后的预期部分数量.
 	SplitPartsCount = 2
 
-	// StateInput 表示输入状态.
-	StateInput = "input"
-
 	// ErrDownloadCancelled 表示下载已取消的错误.
 	ErrDownloadCancelled = "下载已取消"
 )
 
-// SuggestionError 表示建议类型的错误.
-type SuggestionError struct {
-	Message   string
-	BestMatch string
-}
-
-func (e *SuggestionError) Error() string {
-	return e.Message
-}
-
-// IsSuggestionError 检查错误是否为建议类型.
-func IsSuggestionError(err error) bool {
-	suggestionError := &SuggestionError{}
-	ok := errors.As(err, &suggestionError)
-	return ok
-}
-
 // App 表示应用程序的主要结构.
 type App struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	apiClient *api.Client
-	dl        *downloader.Downloader
-	tuiModel  *tui.Model
-	program   *tea.Program
+	ctx              context.Context
+	cancel           context.CancelFunc
+	apiClient        *api.Client
+	dl               *downloader.Downloader
+	tuiModel         *tui.Model
+	program          *tea.Program
+	charaNames       map[string]string         // 角色ID -> 中文名
+	costumeNames     map[string]string         // 服装资源包名 -> 中文描述
+	costumeNameInfo  map[string]*api.CostumeNameInfo // 服装资源包名 -> 多语言名称信息
+	charaNamesOnce   bool                      // 是否已加载角色名
+	costumeNamesOnce bool                      // 是否已加载服装名
 }
 
 // NewApp 创建新的应用程序实例.
@@ -90,6 +75,93 @@ func (a *App) initialize() {
 	// 创建 API 客户端和下载器
 	a.apiClient = api.NewClient()
 	a.dl = downloader.NewDownloader(a.apiClient, a.tuiModel, a.program)
+}
+
+// loadCharacterNames 加载角色中文名称映射.
+func (a *App) loadCharacterNames() {
+	if a.charaNamesOnce {
+		return
+	}
+	names, err := a.apiClient.GetCharacterNames(a.ctx)
+	if err != nil {
+		log.DefaultLogger.Warn().Err(err).Msg("加载角色中文名失败，将使用原始名称")
+		a.charaNames = make(map[string]string)
+	} else {
+		a.charaNames = names
+		log.DefaultLogger.Info().Int("count", len(names)).Msg("加载角色中文名成功")
+	}
+	a.charaNamesOnce = true
+}
+
+// loadCostumeNames 加载服装名称映射.
+func (a *App) loadCostumeNames() {
+	if a.costumeNamesOnce {
+		return
+	}
+
+	// 加载中文名称映射（用于显示和文件夹命名）
+	names, err := a.apiClient.GetCostumeNames(a.ctx)
+	if err != nil {
+		log.DefaultLogger.Warn().Err(err).Msg("加载服装中文名失败，将使用原始名称")
+		a.costumeNames = make(map[string]string)
+	} else {
+		a.costumeNames = names
+		log.DefaultLogger.Info().Int("count", len(names)).Msg("加载服装中文名成功")
+	}
+
+	// 加载多语言名称信息（用于搜索）
+	nameInfo, err := a.apiClient.GetCostumeNameInfo(a.ctx)
+	if err != nil {
+		log.DefaultLogger.Warn().Err(err).Msg("加载服装名称信息失败")
+		a.costumeNameInfo = make(map[string]*api.CostumeNameInfo)
+	} else {
+		a.costumeNameInfo = nameInfo
+		log.DefaultLogger.Info().Int("count", len(nameInfo)).Msg("加载服装名称信息成功")
+	}
+
+	a.costumeNamesOnce = true
+}
+
+// loadCharacterList 加载角色列表并发送到 TUI.
+func (a *App) loadCharacterList() {
+	charaList, err := a.apiClient.GetCharacterInfoList(a.ctx)
+	if err != nil {
+		log.DefaultLogger.Error().Err(err).Msg("加载角色列表失败")
+		a.tuiModel.SetError(fmt.Sprintf("加载角色列表失败: %v", err))
+		a.tuiModel.State = tui.StateInput
+		return
+	}
+
+	// 过滤出有 Live2D 模型的角色
+	live2dAssets, err := a.apiClient.GetLive2dAssets(a.ctx)
+	if err != nil {
+		log.DefaultLogger.Error().Err(err).Msg("获取Live2D资源列表失败")
+		a.program.Send(tui.UpdateCharaListMsg{Characters: charaList})
+		return
+	}
+
+	// 提取有 Live2D 模型的角色ID
+	hasLive2d := make(map[int]bool)
+	for costume := range live2dAssets {
+		parts := strings.Split(costume, "_")
+		for _, p := range parts {
+			if id, err := strconv.Atoi(p); err == nil && id < 1000 {
+				hasLive2d[id] = true
+				break
+			}
+		}
+	}
+
+	// 过滤角色列表
+	var filteredList []model.CharacterInfo
+	for _, chara := range charaList {
+		if hasLive2d[chara.ID] {
+			filteredList = append(filteredList, chara)
+		}
+	}
+
+	log.DefaultLogger.Info().Int("count", len(filteredList)).Msg("加载角色列表成功")
+	a.program.Send(tui.UpdateCharaListMsg{Characters: filteredList})
 }
 
 // getLive2dPath 根据 Live2D 名称获取保存路径.
@@ -126,7 +198,42 @@ func (a *App) getLive2dPath(live2dName string) (string, error) {
 	costumePart := strings.Join(parts[foundIdx+1:], "_") // 服装部分
 	costume := strings.Trim(strings.Join([]string{prefix, costumePart}, "_"), "_")
 
-	// 后续逻辑仅使用 charaID 和 costume
+	// 使用中文命名模式
+	if a.tuiModel.NamingMode == config.NamingModeChinese {
+		return a.getLive2dPathChinese(live2dName, charaID, costume)
+	}
+
+	// 原始命名模式
+	return a.getLive2dPathOriginal(live2dName, charaID, costume, costumePart)
+}
+
+// getLive2dPathChinese 使用中文命名获取保存路径.
+func (a *App) getLive2dPathChinese(live2dName string, charaID int, costume string) (string, error) {
+	// 加载中文名称映射
+	a.loadCharacterNames()
+	a.loadCostumeNames()
+
+	// 获取角色中文名
+	charaName := fmt.Sprintf("chara_%03d", charaID)
+	if name, ok := a.charaNames[strconv.Itoa(charaID)]; ok && name != "" {
+		charaName = name
+	}
+
+	// 获取服装中文名（使用完整的 live2dName 进行查找）
+	costumeName := costume
+	if name, ok := a.costumeNames[live2dName]; ok && name != "" {
+		costumeName = name
+	} else if name, ok := a.costumeNames[costume]; ok && name != "" {
+		costumeName = name
+	}
+
+	path := filepath.Join(config.Get().Live2dSavePath, charaName, costumeName)
+	log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功（中文命名）")
+	return path, nil
+}
+
+// getLive2dPathOriginal 使用原始命名获取保存路径.
+func (a *App) getLive2dPathOriginal(live2dName string, charaID int, costume string, costumePart string) (string, error) {
 	chara, err := a.apiClient.GetChara(a.ctx, charaID)
 	if err != nil {
 		log.DefaultLogger.Warn().Int("charaID", charaID).Err(err).Msg("获取角色信息失败，使用角色ID作为目录名")
@@ -135,23 +242,137 @@ func (a *App) getLive2dPath(live2dName string) (string, error) {
 		return path, nil
 	}
 
-	// 如果成功获取角色信息，使用角色名作为目录名
-	firstName, ok := chara["firstName"].([]any)[1].(string)
-	if !ok {
-		// 如果无法获取角色名，使用角色ID作为目录名
+	// 使用全名（characterName），优先级：简体中文(3) > 繁体中文(2) > 日语(0) > 英语(1)
+	characterNames, ok := chara["characterName"].([]any)
+	if !ok || len(characterNames) < 4 {
 		log.DefaultLogger.Warn().Int("charaID", charaID).Msg("无效的角色名字格式，使用角色ID作为目录名")
 		path := filepath.Join(config.Get().Live2dSavePath, fmt.Sprintf("chara_%03d", charaID), costumePart)
 		log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功")
 		return path, nil
 	}
 
-	path := filepath.Join(config.Get().Live2dSavePath, strings.ToLower(firstName), costume)
+	charaName := ""
+	if len(characterNames) > 3 {
+		charaName, _ = characterNames[3].(string)
+	}
+	if charaName == "" && len(characterNames) > 2 {
+		charaName, _ = characterNames[2].(string)
+	}
+	if charaName == "" && len(characterNames) > 0 {
+		charaName, _ = characterNames[0].(string)
+	}
+	if charaName == "" && len(characterNames) > 1 {
+		charaName, _ = characterNames[1].(string)
+	}
+
+	if charaName == "" {
+		log.DefaultLogger.Warn().Int("charaID", charaID).Msg("无法获取角色名，使用角色ID作为目录名")
+		path := filepath.Join(config.Get().Live2dSavePath, fmt.Sprintf("chara_%03d", charaID), costumePart)
+		log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功")
+		return path, nil
+	}
+
+	path := filepath.Join(config.Get().Live2dSavePath, charaName, costume)
 	log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功")
 	return path, nil
 }
 
+// findExistingModelPath 查找已存在的模型目录（支持不同命名模式）
+func (a *App) findExistingModelPath(live2dName string, currentPath string) (string, bool) {
+	// 检查当前路径是否存在完整模型
+	if _, err := os.Stat(filepath.Join(currentPath, "model.json")); err == nil {
+		return currentPath, true
+	}
+
+	// 尝试查找其他命名模式下的路径
+	parts := strings.Split(live2dName, "_")
+	if len(parts) < 2 {
+		return "", false
+	}
+
+	foundIdx := -1
+	var charaID int
+	for i, p := range parts {
+		id, err := strconv.Atoi(p)
+		if err == nil {
+			foundIdx = i
+			charaID = id
+			break
+		}
+	}
+	if foundIdx == -1 || foundIdx >= len(parts)-1 {
+		return "", false
+	}
+
+	prefix := strings.Join(parts[:foundIdx], "_")
+	costumePart := strings.Join(parts[foundIdx+1:], "_")
+	costume := strings.Trim(strings.Join([]string{prefix, costumePart}, "_"), "_")
+
+	savePath := config.Get().Live2dSavePath
+
+	// 尝试中文命名路径
+	a.loadCharacterNames()
+	a.loadCostumeNames()
+	charaName := fmt.Sprintf("chara_%03d", charaID)
+	if name, ok := a.charaNames[strconv.Itoa(charaID)]; ok && name != "" {
+		charaName = name
+	}
+	// 使用完整的 live2dName 查找中文名（与 getLive2dPathChinese 一致）
+	costumeName := costume
+	if name, ok := a.costumeNames[live2dName]; ok && name != "" {
+		costumeName = name
+	} else if name, ok := a.costumeNames[costume]; ok && name != "" {
+		costumeName = name
+	}
+	chinesePath := filepath.Join(savePath, charaName, costumeName)
+	if chinesePath != currentPath {
+		if _, err := os.Stat(filepath.Join(chinesePath, "model.json")); err == nil {
+			return chinesePath, true
+		}
+	}
+
+	// 尝试原始命名路径（使用角色全名）
+	chara, err := a.apiClient.GetChara(a.ctx, charaID)
+	if err == nil {
+		characterNames, ok := chara["characterName"].([]any)
+		if ok && len(characterNames) >= 4 {
+			charaName := ""
+			if len(characterNames) > 3 {
+				charaName, _ = characterNames[3].(string)
+			}
+			if charaName == "" && len(characterNames) > 2 {
+				charaName, _ = characterNames[2].(string)
+			}
+			if charaName == "" && len(characterNames) > 0 {
+				charaName, _ = characterNames[0].(string)
+			}
+			if charaName == "" && len(characterNames) > 1 {
+				charaName, _ = characterNames[1].(string)
+			}
+			if charaName != "" {
+				originalPath := filepath.Join(savePath, charaName, costume)
+				if originalPath != currentPath {
+					if _, err := os.Stat(filepath.Join(originalPath, "model.json")); err == nil {
+						return originalPath, true
+					}
+				}
+			}
+		}
+	}
+
+	// 尝试原始命名路径（使用角色ID）
+	idPath := filepath.Join(savePath, fmt.Sprintf("chara_%03d", charaID), costumePart)
+	if idPath != currentPath {
+		if _, err := os.Stat(filepath.Join(idPath, "model.json")); err == nil {
+			return idPath, true
+		}
+	}
+
+	return "", false
+}
+
 // downloadLive2d 下载指定的 Live2D 模型.
-func (a *App) downloadLive2d(live2d *model.Live2dAsset) error {
+func (a *App) downloadLive2d(live2d *model.Live2dAsset, displayName string) error {
 	log.DefaultLogger.Info().Str("live2dName", live2d.Costume).Msg("开始下载Live2D")
 
 	server, data, err := a.apiClient.GetLive2dData(a.ctx, live2d)
@@ -165,7 +386,36 @@ func (a *App) downloadLive2d(live2d *model.Live2dAsset) error {
 		return err
 	}
 
-	builder := downloader.NewLive2dBuilder(path, server, data, a.dl, live2d.String())
+	// 检查是否有已存在的完整模型（可能是其他命名模式下的）
+	existingPath, isComplete := a.findExistingModelPath(live2d.Costume, path)
+	if isComplete && existingPath != path {
+		// 模型已存在于其他命名模式下，只需重命名目录
+		log.DefaultLogger.Info().
+			Str("live2dName", live2d.Costume).
+			Str("oldPath", existingPath).
+			Str("newPath", path).
+			Msg("检测到已存在的模型，重命名目录")
+		if renameErr := downloader.RenameModelDir(existingPath, path); renameErr != nil {
+			log.DefaultLogger.Error().Err(renameErr).Msg("重命名目录失败")
+			return fmt.Errorf("重命名目录失败: %w", renameErr)
+		}
+		log.DefaultLogger.Info().Str("path", path).Msg("目录重命名完成")
+
+		// 重命名完成，更新进度到 100%
+		a.updateProgressComplete(displayName, data)
+		return nil
+	}
+
+	// 检查当前路径是否已完整
+	if isComplete {
+		log.DefaultLogger.Info().Str("path", path).Msg("模型已存在，跳过下载")
+
+		// 模型已存在，更新进度到 100%
+		a.updateProgressComplete(displayName, data)
+		return nil
+	}
+
+	builder := downloader.NewLive2dBuilder(path, server, data, a.dl, live2d.String(), displayName)
 	if constructErr := builder.Construct(); constructErr != nil {
 		log.DefaultLogger.Error().Str("live2dName", live2d.Costume).Err(constructErr).Msg("构建Live2D模型失败")
 		return fmt.Errorf("构建Live2D模型失败: %w", constructErr)
@@ -175,71 +425,18 @@ func (a *App) downloadLive2d(live2d *model.Live2dAsset) error {
 	return nil
 }
 
-// findChara 根据名称搜索角色.
-func (a *App) findChara(name string) (*model.MatchChara, error) {
-	log.DefaultLogger.Info().Str("name", name).Msg("开始搜索角色")
+// updateProgressComplete 更新进度到 100%（用于已存在模型的情况）
+func (a *App) updateProgressComplete(displayName string, data *model.BuildData) {
+	// 计算总文件数
+	totalFiles := 1 + // model.moc
+		1 + // physics.json
+		len(data.Textures) +
+		len(data.Motions) +
+		len(data.Expressions)
 
-	characterRoster, err := a.apiClient.GetCharaRoster(a.ctx)
-	if err != nil {
-		log.DefaultLogger.Error().Str("name", name).Err(err).Msg("获取角色列表失败")
-		return nil, fmt.Errorf("获取角色列表失败: %w", err)
-	}
-
-	candidates := make(map[string][]string)
-	for charaID, info := range characterRoster {
-		charaIDNum, parseErr := strconv.Atoi(charaID)
-		if parseErr != nil || charaIDNum > 1000 {
-			continue
-		}
-
-		charaInfo, ok := info.(map[string]any)
-		if !ok {
-			continue
-		}
-		characterNames, ok := charaInfo["characterName"].([]any)
-		if !ok {
-			continue
-		}
-		names := make([]string, len(characterNames))
-		for i := range characterNames {
-			characterName, nameOk := characterNames[i].(string)
-			if !nameOk {
-				continue
-			}
-			names[i] = characterName
-		}
-		candidates[charaID] = names
-	}
-
-	bestID, bestMatch, maxSimilarity := matcher.FindBestMatch(name, candidates)
-	// 设置相似度阈值，用于判断是否为高置信度匹配
-	const similarityThreshold = 0.6
-
-	if maxSimilarity < similarityThreshold {
-		log.DefaultLogger.Warn().
-			Str("name", name).
-			Str("bestMatch", bestMatch).
-			Float64("similarity", maxSimilarity).
-			Float64("threshold", similarityThreshold).
-			Msg("未找到足够相似的角色，但提供最佳建议")
-		return nil, &SuggestionError{
-			Message:   fmt.Sprintf("未找到符合此名称的角色，你要找的是「%s」吗？", bestMatch),
-			BestMatch: bestMatch,
-		}
-	}
-
-	id, _ := strconv.Atoi(bestID)
-	log.DefaultLogger.Info().
-		Str("name", name).
-		Str("bestMatch", bestMatch).
-		Float64("similarity", maxSimilarity).
-		Float64("threshold", similarityThreshold).
-		Msg("找到匹配的角色")
-	return &model.MatchChara{
-		ID:    id,
-		Name:  bestMatch,
-		Names: candidates[bestID],
-	}, nil
+	// 添加下载项并立即设置为完成
+	a.tuiModel.AddDownloadItem(displayName, totalFiles)
+	a.tuiModel.UpdateProgress(displayName, totalFiles)
 }
 
 // updateCharaCostumes 更新角色服装列表.
@@ -249,22 +446,32 @@ func (a *App) updateCharaCostumes(id int, firstName string, displayName string) 
 	if err != nil {
 		log.DefaultLogger.Error().Int("charaID", id).Err(err).Msg("获取角色服装列表失败")
 		a.tuiModel.SetError(fmt.Sprintf("获取角色服装列表失败: %v", err))
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateCharaList
 		return true
 	}
 
 	if len(costumes) == 0 {
 		log.DefaultLogger.Warn().Int("charaID", id).Msg("未找到该角色的 Live2D 模型")
 		a.tuiModel.SetError("未找到该角色的 Live2D 模型")
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateCharaList
 		return true
 	}
 
 	// 清除之前的错误消息
 	a.tuiModel.ClearError()
 
+	// 过滤出可下载的服装（验证 buildData.asset 是否存在）
+	validCostumes := a.filterValidCostumes(costumes)
+
+	if len(validCostumes) == 0 {
+		log.DefaultLogger.Warn().Int("charaID", id).Msg("该角色没有可下载的 Live2D 模型")
+		a.tuiModel.SetError("该角色没有可下载的 Live2D 模型")
+		a.tuiModel.State = tui.StateCharaList
+		return true
+	}
+
 	var costumeAssets []*model.Live2dAsset
-	for _, live2d := range costumes {
+	for _, live2d := range validCostumes {
 		// create a copy to take address
 		aCopy := live2d
 		costumeAssets = append(costumeAssets, &aCopy)
@@ -279,25 +486,108 @@ func (a *App) updateCharaCostumes(id int, firstName string, displayName string) 
 	}
 	log.DefaultLogger.Info().
 		Str("charaName", firstName).
-		Int("costumesCount", len(costumes)).
+		Int("costumesCount", len(validCostumes)).
+		Int("filteredCount", len(costumes)-len(validCostumes)).
 		Msg("找到角色服装列表")
-	a.program.Send(tui.UpdateListMsg{Items: costumeAssets})
+
+	// 加载服装名称信息
+	a.loadCostumeNames()
+
+	// 构建服装名称信息映射（用于搜索）
+	costumeNameInfoMap := make(map[string]*tui.CostumeNameInfo)
+	for _, asset := range costumeAssets {
+		if info, ok := a.costumeNameInfo[asset.Costume]; ok {
+			costumeNameInfoMap[asset.Costume] = &tui.CostumeNameInfo{
+				Original: info.Original,
+				Chinese:  info.Chinese,
+				Japanese: info.Japanese,
+			}
+		} else {
+			costumeNameInfoMap[asset.Costume] = &tui.CostumeNameInfo{
+				Original: asset.String(),
+			}
+		}
+	}
+
+	// 发送列表更新（costumeNames 用于显示，costumeNameInfo 用于搜索）
+	a.program.Send(tui.UpdateListMsg{
+		Items:            costumeAssets,
+		CostumeNames:     a.costumeNames,     // 显示用的中文名映射
+		CostumeNameInfo:  costumeNameInfoMap,  // 搜索用的多语言信息
+		CharaID:          id,
+	})
 
 	return true
 }
 
-// handleCharaIDSearch 处理角色编号搜索请求.
-func (a *App) handleCharaIDSearch(charaID string) bool {
-	id, err := strconv.Atoi(charaID)
-	if err != nil {
-		log.DefaultLogger.Error().Str("charaID", charaID).Err(err).Msg("无效的角色编号")
-		a.tuiModel.SetError(fmt.Sprintf("无效的角色编号: %s", charaID))
-		a.tuiModel.State = StateInput
-		return true
+// filterValidCostumes 过滤出可下载的服装（并发验证 buildData.asset）
+func (a *App) filterValidCostumes(costumes []model.Live2dAsset) []model.Live2dAsset {
+	type result struct {
+		index int
+		valid bool
 	}
 
-	firstName, displayName := a.getCharaNames(id)
-	return a.updateCharaCostumes(id, firstName, displayName)
+	resultChan := make(chan result, len(costumes))
+	sem := make(chan struct{}, 10) // 并发限制
+
+	for i, costume := range costumes {
+		go func(idx int, c model.Live2dAsset) {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// 获取服务器配置
+			s, ok := a.apiClient.GetAssetServer(c.Server)
+			if !ok {
+				resultChan <- result{index: idx, valid: false}
+				return
+			}
+
+			// 检查 buildData.asset 是否存在
+			url := fmt.Sprintf("%s/live2d/chara/%s_rip/buildData.asset", s.BaseAssetsURL, c.Costume)
+			valid := a.checkURLValid(url)
+			resultChan <- result{index: idx, valid: valid}
+		}(i, costume)
+	}
+
+	// 收集结果（按原始顺序）
+	validFlags := make([]bool, len(costumes))
+	for range costumes {
+		r := <-resultChan
+		validFlags[r.index] = r.valid
+	}
+
+	// 按原始顺序返回有效的服装
+	var validCostumes []model.Live2dAsset
+	for i, valid := range validFlags {
+		if valid {
+			validCostumes = append(validCostumes, costumes[i])
+		}
+	}
+
+	return validCostumes
+}
+
+// checkURLValid 检查 URL 是否返回有效 JSON（非 HTML）
+func (a *App) checkURLValid(url string) bool {
+	req, err := http.NewRequestWithContext(a.ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := a.apiClient.HTTPClient().Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	// 检查 Content-Type
+	contentType := resp.Header.Get("Content-Type")
+	return !strings.HasPrefix(contentType, "text/html")
 }
 
 // getCharaNames 获取角色名称，如果获取失败则使用默认名称.
@@ -332,39 +622,6 @@ func (a *App) getCharaNames(id int) (string, string) {
 	}
 
 	return firstName, displayName
-}
-
-// handleCharaSearch 处理角色搜索请求.
-func (a *App) handleCharaSearch(input string) bool {
-	matchChara, err := a.findChara(input)
-	if err != nil {
-		// 检查是否为建议错误（相似度不够高的情况）
-		if IsSuggestionError(err) {
-			log.DefaultLogger.Warn().Str("input", input).Err(err).Msg("提供角色建议")
-			a.tuiModel.SetError(err.Error())
-			a.tuiModel.State = StateInput
-			return true
-		}
-
-		log.DefaultLogger.Error().Str("input", input).Err(err).Msg("搜索角色失败")
-		a.tuiModel.SetError(fmt.Sprintf("搜索角色失败: %v", err))
-		a.tuiModel.State = StateInput
-		return true
-	}
-	if matchChara == nil {
-		log.DefaultLogger.Warn().Str("input", input).Msg("未找到角色")
-		a.tuiModel.SetError(fmt.Sprintf("未找到角色: %s", input))
-		a.tuiModel.State = StateInput
-		return true
-	}
-
-	// 使用与 main.go 相同的名称逻辑
-	displayName := matchChara.Names[3]
-	if displayName == "" {
-		displayName = matchChara.Names[0]
-	}
-
-	return a.updateCharaCostumes(matchChara.ID, matchChara.Name, displayName)
 }
 
 func (a *App) resolveDirectDownloadAssets(modelNames []string) ([]*model.Live2dAsset, []string, error) {
@@ -421,7 +678,7 @@ func (a *App) handleDirectDownload(input string) bool {
 	if len(modelNames) == 0 {
 		log.DefaultLogger.Error().Str("input", input).Msg("没有有效的模型名称")
 		a.tuiModel.SetError("没有有效的模型名称")
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateInput
 		return true
 	}
 
@@ -429,7 +686,7 @@ func (a *App) handleDirectDownload(input string) bool {
 	if err != nil {
 		log.DefaultLogger.Error().Strs("models", modelNames).Err(err).Msg("验证模型失败")
 		a.tuiModel.SetError(err.Error())
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateInput
 		return true
 	}
 
@@ -438,54 +695,61 @@ func (a *App) handleDirectDownload(input string) bool {
 		errorMsg := fmt.Sprintf("以下模型不存在: %s", strings.Join(invalidModels, ", "))
 		log.DefaultLogger.Error().Strs("invalidModels", invalidModels).Msg("发现无效的模型名称")
 		a.tuiModel.SetError(errorMsg)
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateInput
 		return true
 	}
 
 	a.tuiModel.State = "downloading"
 	a.tuiModel.DownloadList.Title = "下载进度"
 
+	// 转换为 SelectedItem（直接下载时使用原始名称）
+	var selectedItems []*tui.SelectedItem
+	for _, asset := range assets {
+		selectedItems = append(selectedItems, &tui.SelectedItem{
+			Asset:       asset,
+			DisplayName: asset.String(),
+		})
+	}
+
 	// 使用批量下载功能处理多个模型
-	return a.handleBatchDownload(assets)
+	return a.handleBatchDownload(selectedItems)
 }
 
 // handleDownload 处理下载请求.
 func (a *App) handleDownload(input string) bool {
-	// 检查是否为纯数字
-	if _, err := strconv.Atoi(input); err == nil {
-		// 如果是纯数字，直接搜索该编号的角色
-		return a.handleCharaIDSearch(input)
-	}
-
-	// 优先按完整模型名称处理，再回退到角色搜索
+	// 直接按模型名称下载
 	direct, err := a.shouldHandleAsDirectDownload(input)
 	if err != nil {
 		log.DefaultLogger.Error().Str("input", input).Err(err).Msg("验证模型失败")
 		a.tuiModel.SetError(err.Error())
-		a.tuiModel.State = StateInput
+		a.tuiModel.State = tui.StateInput
 		return true
 	}
 	if direct {
 		return a.handleDirectDownload(input)
 	}
 
-	// 如果不是模型名称，则尝试角色搜索
-	return a.handleCharaSearch(input)
+	// 无效的模型名称
+	a.tuiModel.SetError(fmt.Sprintf("模型 \"%s\" 不存在", input))
+	a.tuiModel.State = tui.StateInput
+	return true
 }
 
 // downloadModel 下载单个模型.
 func (a *App) downloadModel(
 	asset *model.Live2dAsset,
+	displayName string,
 	errChan chan error,
 	completed map[string]bool,
 	progressUpdated chan struct{},
 ) {
-	name := ""
-	if asset != nil {
+	// 使用传入的翻译名
+	name := displayName
+	if name == "" && asset != nil {
 		name = asset.String()
 	}
 
-	if err := a.downloadLive2d(asset); err != nil {
+	if err := a.downloadLive2d(asset, displayName); err != nil {
 		if err.Error() == ErrDownloadCancelled {
 			errChan <- err
 			return
@@ -504,7 +768,7 @@ func (a *App) downloadModel(
 }
 
 // handleBatchDownload 处理批量下载请求.
-func (a *App) handleBatchDownload(selectedItems []*model.Live2dAsset) bool {
+func (a *App) handleBatchDownload(selectedItems []*tui.SelectedItem) bool {
 	if len(selectedItems) == 0 {
 		return true
 	}
@@ -519,7 +783,7 @@ func (a *App) handleBatchDownload(selectedItems []*model.Live2dAsset) bool {
 	modelSem := make(chan struct{}, config.Get().MaxConcurrentModels)
 	progressUpdated := make(chan struct{}, 1) // 用于通知进度已更新
 
-	for _, asset := range selectedItems {
+	for _, item := range selectedItems {
 		select {
 		case <-a.ctx.Done():
 			a.handleCancelledDownloads(selectedItems, completed)
@@ -533,10 +797,10 @@ func (a *App) handleBatchDownload(selectedItems []*model.Live2dAsset) bool {
 			continue
 		default:
 			modelSem <- struct{}{}
-			go func(asset *model.Live2dAsset) {
+			go func(item *tui.SelectedItem) {
 				defer func() { <-modelSem }()
-				a.downloadModel(asset, errChan, completed, progressUpdated)
-			}(asset)
+				a.downloadModel(item.Asset, item.DisplayName, errChan, completed, progressUpdated)
+			}(item)
 		}
 	}
 
@@ -548,15 +812,16 @@ func (a *App) handleBatchDownload(selectedItems []*model.Live2dAsset) bool {
 }
 
 // handleCancelledDownloads 处理已取消的下载.
-func (a *App) handleCancelledDownloads(selectedItems []*model.Live2dAsset, completed map[string]bool) {
-	for _, asset := range selectedItems {
-		name := ""
-		if asset != nil {
-			name = asset.String()
+func (a *App) handleCancelledDownloads(selectedItems []*tui.SelectedItem, completed map[string]bool) {
+	for _, item := range selectedItems {
+		// 使用翻译名
+		name := item.DisplayName
+		if name == "" && item.Asset != nil {
+			name = item.Asset.String()
 		}
+
 		if !completed[name] {
 			log.DefaultLogger.Error().Str("model", name).Msg("下载已取消")
-			// 注意：总体进度已经在downloadModel中更新，这里不需要重复更新
 		}
 	}
 }
@@ -575,6 +840,9 @@ func (a *App) Run() {
 		}
 	}()
 
+	// 加载角色列表
+	go a.loadCharacterList()
+
 	// 处理用户输入和下载
 	for {
 		select {
@@ -584,12 +852,10 @@ func (a *App) Run() {
 		case <-a.tuiModel.GetCancelChan():
 			a.cancel()
 			return
+		case charaID := <-a.tuiModel.GetCharaSelectChan():
+			firstName, displayName := a.getCharaNames(charaID)
+			a.updateCharaCostumes(charaID, firstName, displayName)
 		case input := <-a.tuiModel.GetSearchChan():
-			if input == "q" {
-				a.cancel()
-				return
-			}
-
 			if !a.handleDownload(input) {
 				return
 			}
