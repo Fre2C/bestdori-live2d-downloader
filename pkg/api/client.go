@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,6 +119,13 @@ func (c *Client) FetchData(ctx context.Context, url string, cache string) (map[s
 		return nil, fmt.Errorf("HTTP错误: %d", resp.StatusCode)
 	}
 
+	// 检查 Content-Type，避免将 HTML 错误页面当作 JSON 解析
+	contentType := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "text/html") {
+		log.DefaultLogger.Error().Str("url", url).Str("contentType", contentType).Msg("返回了HTML而非JSON")
+		return nil, fmt.Errorf("资源不存在或无法访问: %s", url)
+	}
+
 	var result map[string]any
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
 		log.DefaultLogger.Error().Str("url", url).Err(decodeErr).Msg("解析JSON失败")
@@ -152,6 +161,761 @@ func (c *Client) FetchData(ctx context.Context, url string, cache string) (map[s
 func (c *Client) GetCharaRoster(ctx context.Context) (map[string]any, error) {
 	url := fmt.Sprintf("%s/all.2.json", c.charaRosterURL)
 	return c.FetchData(ctx, url, "chara_roster.json")
+}
+
+// GetCharacterNames 获取所有角色的中文名称映射
+// 返回 map[characterID]chineseFullName
+// 参数:
+//   - ctx: 上下文
+//
+// 返回:
+//   - map[string]string: 角色ID到中文全名的映射
+//   - error: 错误信息
+func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, error) {
+	url := fmt.Sprintf("%s/all.5.json", c.charaRosterURL)
+	data, err := c.FetchData(ctx, url, "chara_names_5.json")
+	if err != nil {
+		return nil, err
+	}
+
+	names := make(map[string]string)
+	for charaID, info := range data {
+		charaInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+		// 使用 characterName（全名）而非 firstName
+		charaNameList, ok := charaInfo["characterName"].([]any)
+		if !ok || len(charaNameList) < 4 {
+			continue
+		}
+		// 优先级：简体中文(3) > 繁体中文(2) > 日语(0) > 英语(1)
+		chineseName := ""
+		if len(charaNameList) > 3 {
+			chineseName, _ = charaNameList[3].(string)
+		}
+		if chineseName == "" && len(charaNameList) > 2 {
+			chineseName, _ = charaNameList[2].(string)
+		}
+		if chineseName == "" && len(charaNameList) > 0 {
+			chineseName, _ = charaNameList[0].(string)
+		}
+		if chineseName == "" && len(charaNameList) > 1 {
+			chineseName, _ = charaNameList[1].(string)
+		}
+		if chineseName != "" {
+			names[charaID] = chineseName
+		}
+	}
+
+	return names, nil
+}
+
+// CharacterInfo 表示角色信息.
+type CharacterInfo = model.CharacterInfo
+
+// defaultCharaColors 没有颜色代码的角色的默认颜色映射.
+var defaultCharaColors = map[int]string{
+	601: "#DD33CC", // 奥泽美咲 (Michelle 真人形态)
+}
+
+// GetCharacterInfoList 获取所有角色信息列表（包含颜色）
+// 参数:
+//   - ctx: 上下文
+//
+// 返回:
+//   - []CharacterInfo: 角色信息列表
+//   - error: 错误信息
+func (c *Client) GetCharacterInfoList(ctx context.Context) ([]CharacterInfo, error) {
+	url := fmt.Sprintf("%s/all.5.json", c.charaRosterURL)
+	data, err := c.FetchData(ctx, url, "chara_names_5.json")
+	if err != nil {
+		return nil, err
+	}
+
+	var result []CharacterInfo
+	for charaID, info := range data {
+		id, parseErr := strconv.Atoi(charaID)
+		if parseErr != nil || id > 1000 {
+			continue
+		}
+
+		charaInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// 使用 characterName（全名）而不是 firstName
+		charaNameList, ok := charaInfo["characterName"].([]any)
+		if !ok || len(charaNameList) < 4 {
+			continue
+		}
+
+		chineseName, _ := charaNameList[3].(string)
+		if chineseName == "" {
+			continue
+		}
+
+		colorCode, _ := charaInfo["colorCode"].(string)
+
+		// 为没有颜色的角色添加硬编码颜色
+		if colorCode == "" {
+			if fallback, ok := defaultCharaColors[id]; ok {
+				colorCode = fallback
+			}
+		}
+
+		result = append(result, CharacterInfo{
+			ID:    id,
+			Name:  chineseName,
+			Color: colorCode,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+
+	return result, nil
+}
+
+// CostumeNameInfo 表示服装的多语言名称信息.
+type CostumeNameInfo struct {
+	Original string // 原始名称（assetBundleName）
+	Chinese  string // 中文名称（简体/繁体）
+	Japanese string // 日文名称
+	English  string // 英文名称
+}
+
+// GetCostumeNameInfo 获取所有服装的多语言名称信息
+// 返回 map[live2dAssetBundleName]CostumeNameInfo
+// 参数:
+//   - ctx: 上下文
+//
+// 返回:
+//   - map[string]*CostumeNameInfo: Live2D服装名到多语言名称信息的映射
+//   - error: 错误信息
+func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNameInfo, error) {
+	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
+	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
+	if err != nil {
+		return nil, fmt.Errorf("获取服装数据失败: %w", err)
+	}
+
+	// 从服装 API 建立 assetBundleName -> 名称信息
+	names := make(map[string]*CostumeNameInfo)
+	for _, info := range costumeData {
+		costumeInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+		bundleName, _ := costumeInfo["assetBundleName"].(string)
+		if bundleName == "" {
+			continue
+		}
+		descList, ok := costumeInfo["description"].([]any)
+		if !ok || len(descList) < 1 {
+			continue
+		}
+
+		nameInfo := &CostumeNameInfo{Original: bundleName}
+
+		// 获取各语言描述
+		if len(descList) > 0 {
+			nameInfo.Japanese, _ = descList[0].(string)
+		}
+		if len(descList) > 1 {
+			nameInfo.English, _ = descList[1].(string)
+		}
+		if len(descList) > 2 {
+			nameInfo.Chinese, _ = descList[2].(string) // 繁体中文
+		}
+		if len(descList) > 3 {
+			if simplified, _ := descList[3].(string); simplified != "" {
+				nameInfo.Chinese = simplified // 简体中文优先
+			}
+		}
+
+		names[bundleName] = nameInfo
+	}
+
+	// 从角色 API 获取所有 Live2D 服装名
+	charaURL := fmt.Sprintf("%s/all.5.json", c.charaRosterURL)
+	charaData, fetchErr := c.FetchData(ctx, charaURL, "chara_names_5.json")
+	if fetchErr != nil {
+		return nil, fmt.Errorf("获取角色数据失败: %w", fetchErr)
+	}
+
+	// 收集所有 live2dAssetBundleName
+	live2dNames := make(map[string]bool)
+	for charaIDStr, info := range charaData {
+		charaID, parseErr := strconv.Atoi(charaIDStr)
+		if parseErr != nil || charaID > 1000 {
+			continue
+		}
+		charaInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+		seasonMap, ok := charaInfo["seasonCostumeListMap"].(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, ok := seasonMap["entries"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, season := range entries {
+			seasonData, ok := season.(map[string]any)
+			if !ok {
+				continue
+			}
+			costumeEntries, ok := seasonData["entries"].([]any)
+			if !ok {
+				continue
+			}
+			for _, entry := range costumeEntries {
+				entryData, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				live2dName, _ := entryData["live2dAssetBundleName"].(string)
+				if live2dName != "" {
+					live2dNames[live2dName] = true
+				}
+			}
+		}
+	}
+
+	// 也从资源索引获取所有 Live2D 服装名
+	live2dAssets, _ := c.getLive2dAssets(ctx)
+	for name := range live2dAssets {
+		live2dNames[name] = true
+	}
+
+	// 获取活动名称映射（用于 event_XXX_story_YY 等模式）
+	eventNames := make(map[int]string)
+	eventsURL := "https://bestdori.com/api/events/all.5.json"
+	eventsData, eventsErr := c.FetchData(ctx, eventsURL, "events_all_5.json")
+	if eventsErr == nil {
+		for eventIDStr, info := range eventsData {
+			eventID, parseErr := strconv.Atoi(eventIDStr)
+			if parseErr != nil {
+				continue
+			}
+			eventInfo, ok := info.(map[string]any)
+			if !ok {
+				continue
+			}
+			nameList, ok := eventInfo["eventName"].([]any)
+			if !ok || len(nameList) < 4 {
+				continue
+			}
+			// 优先级：简体中文(3) > 繁体中文(2) > 日语(0) > 英语(1)
+			name := ""
+			if len(nameList) > 3 {
+				name, _ = nameList[3].(string)
+			}
+			if name == "" && len(nameList) > 2 {
+				name, _ = nameList[2].(string)
+			}
+			if name == "" && len(nameList) > 0 {
+				name, _ = nameList[0].(string)
+			}
+			if name == "" && len(nameList) > 1 {
+				name, _ = nameList[1].(string)
+			}
+			if name != "" {
+				eventNames[eventID] = name
+			}
+		}
+	}
+
+	// 为没有直接匹配的 Live2D 名补充硬编码映射
+	for live2dName := range live2dNames {
+		if _, exists := names[live2dName]; exists {
+			continue
+		}
+		// 提取后缀
+		parts := strings.SplitN(live2dName, "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		suffix := parts[1]
+
+		// 使用模式匹配翻译（传入 eventNames）
+		if translated := translateCostumeSuffix(suffix, eventNames); translated != "" {
+			names[live2dName] = &CostumeNameInfo{
+				Original: live2dName,
+				Chinese:  translated,
+			}
+		}
+	}
+
+	return names, nil
+}
+
+// GetCostumeNames 获取所有服装的中文名称映射
+// 返回 map[live2dAssetBundleName]chineseDescription
+// 策略：直接用 assetBundleName 匹配，优先简体中文(index 3)，无则繁体中文(index 2)，都没有则查硬编码表
+// 参数:
+//   - ctx: 上下文
+//
+// 返回:
+//   - map[string]string: Live2D服装名到中文描述的映射
+//   - error: 错误信息
+func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error) {
+	costumeURL := "https://bestdori.com/api/costumes/all.5.json"
+	costumeData, err := c.FetchData(ctx, costumeURL, "costume_names_5.json")
+	if err != nil {
+		return nil, fmt.Errorf("获取服装数据失败: %w", err)
+	}
+
+	// 从服装 API 建立 assetBundleName -> 中文描述
+	names := make(map[string]string)
+	for _, info := range costumeData {
+		costumeInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+		bundleName, _ := costumeInfo["assetBundleName"].(string)
+		if bundleName == "" {
+			continue
+		}
+		descList, ok := costumeInfo["description"].([]any)
+		if !ok || len(descList) < 3 {
+			continue
+		}
+		// 优先级：简体中文(3) > 繁体中文(2) > 日语(0) > 英语(1)
+		desc := ""
+		if len(descList) > 3 {
+			desc, _ = descList[3].(string)
+		}
+		if desc == "" && len(descList) > 2 {
+			desc, _ = descList[2].(string)
+		}
+		if desc == "" && len(descList) > 0 {
+			desc, _ = descList[0].(string)
+		}
+		if desc == "" && len(descList) > 1 {
+			desc, _ = descList[1].(string)
+		}
+		if desc != "" {
+			names[bundleName] = desc
+		}
+	}
+
+	// 从角色 API 收集所有 Live2D 服装名
+	charaURL := fmt.Sprintf("%s/all.5.json", c.charaRosterURL)
+	charaData, fetchErr := c.FetchData(ctx, charaURL, "chara_names_5.json")
+	if fetchErr != nil {
+		return nil, fmt.Errorf("获取角色数据失败: %w", fetchErr)
+	}
+
+	live2dNames := make(map[string]bool)
+	for charaIDStr, info := range charaData {
+		charaID, parseErr := strconv.Atoi(charaIDStr)
+		if parseErr != nil || charaID > 1000 {
+			continue
+		}
+		charaInfo, ok := info.(map[string]any)
+		if !ok {
+			continue
+		}
+		seasonMap, ok := charaInfo["seasonCostumeListMap"].(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, ok := seasonMap["entries"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, season := range entries {
+			seasonData, ok := season.(map[string]any)
+			if !ok {
+				continue
+			}
+			costumeEntries, ok := seasonData["entries"].([]any)
+			if !ok {
+				continue
+			}
+			for _, entry := range costumeEntries {
+				entryData, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				live2dName, _ := entryData["live2dAssetBundleName"].(string)
+				if live2dName != "" {
+					live2dNames[live2dName] = true
+				}
+			}
+		}
+	}
+
+	// 也从资源索引获取所有 Live2D 服装名（补充角色 API 中没有的）
+	live2dAssets, _ := c.getLive2dAssets(ctx)
+	for name := range live2dAssets {
+		live2dNames[name] = true
+	}
+
+	// 为没有直接匹配的 Live2D 名补充通用服装映射
+
+	// 获取活动名称映射（用于 event_XXX_story_YY 模式）
+	eventNames := make(map[int]string)
+	eventsURL := "https://bestdori.com/api/events/all.5.json"
+	eventsData, eventsErr := c.FetchData(ctx, eventsURL, "events_all_5.json")
+	if eventsErr == nil {
+		for eventIDStr, info := range eventsData {
+			eventID, parseErr := strconv.Atoi(eventIDStr)
+			if parseErr != nil {
+				continue
+			}
+			eventInfo, ok := info.(map[string]any)
+			if !ok {
+				continue
+			}
+			nameList, ok := eventInfo["eventName"].([]any)
+			if !ok || len(nameList) < 4 {
+				continue
+			}
+			// 优先级：简体中文(3) > 繁体中文(2) > 日语(0) > 英语(1)
+			name := ""
+			if len(nameList) > 3 {
+				name, _ = nameList[3].(string)
+			}
+			if name == "" && len(nameList) > 2 {
+				name, _ = nameList[2].(string)
+			}
+			if name == "" && len(nameList) > 0 {
+				name, _ = nameList[0].(string)
+			}
+			if name == "" && len(nameList) > 1 {
+				name, _ = nameList[1].(string)
+			}
+			if name != "" {
+				eventNames[eventID] = name
+			}
+		}
+	}
+
+	for live2dName := range live2dNames {
+		if _, exists := names[live2dName]; exists {
+			continue
+		}
+		// 提取后缀（去掉角色ID前缀，如 003_casual -> casual）
+		parts := strings.SplitN(live2dName, "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		suffix := parts[1]
+
+		// 使用模式匹配翻译
+		if translated := translateCostumeSuffix(suffix, eventNames); translated != "" {
+			names[live2dName] = translated
+		}
+	}
+
+	return names, nil
+}
+
+// translateVariant 翻译服装变体后缀
+func translateVariant(variant string) string {
+	variants := map[string]string{
+		"penlight": "荧光棒",
+		"nocap":    "无帽",
+		"sunglass": "墨镜",
+	}
+	if name, ok := variants[variant]; ok {
+		return name
+	}
+	return variant
+}
+
+// translateCostumeSuffix 根据后缀模式翻译服装名称
+// 优先级：精确匹配 > 模式匹配 > 年份组合匹配
+func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
+	// 1. 精确匹配表
+	exactMatches := map[string]string{
+		// 基础通用服
+		"casual":               "常服",
+		"casual_summer":        "夏季常服",
+		"casual_winter":        "冬季常服",
+		"casual_winter-sunglass": "常服(冬·墨镜)",
+		"casual_v3":            "常服v3",
+		"school":               "校服",
+		"school_winter":        "冬服",
+		"school_winter_2":      "冬服2",
+		"school_winter_s2":     "冬服s2",
+		"school_winter_v3":     "冬服v3",
+		"school_summer":        "夏服",
+		"school_summer_s2":     "夏服s2",
+		"school_summer_v3":     "夏服v3",
+		"school_armband":       "校服(臂章)",
+		"jh_school_winter":     "初中冬服",
+		"uniform":              "制服",
+		"default":              "默认",
+		"general":              "通用",
+
+		// 场景/职业/运动服
+		"gym_clothes":          "体操服",
+		"tracksuit":            "运动服",
+		"pajamas":              "睡衣",
+		"swimsuit":             "泳装",
+		"swim_swit":            "泳装",
+		"apron":                "围裙",
+		"cafe":                 "咖啡厅制服",
+		"fast_food":            "快餐店制服",
+		"arbeit":               "打工服",
+		"store":                "店员服",
+		"chairperson_casual":   "学生会长服",
+		"practice_clothes":     "练习服",
+		"stage_costume":        "舞台服装",
+		"wd_practice":          "白色情人节练习服",
+		"garupa_t":             "Garupa T恤",
+		"memorial_middle_school": "纪念中学制服",
+
+		// 节日/纪念服
+		"af":                   "愚人节",
+		"xmas":                 "圣诞",
+		"hw":                   "万圣节",
+		"halloween":            "万圣节",
+		"halloween_without_lantern": "万圣节(无灯)",
+		"furisode":             "振袖",
+		"yukata":               "浴衣",
+		"anniv":                "周年纪念",
+		"special_5th":          "5周年纪念",
+		"girlparty2019":        "女子聚会2019",
+		"precious_summer":      "珍贵夏日",
+		"anime_live":           "动画Live",
+		"popipa_fes":           "Popipa祭典",
+		"kirameki_festival":    "闪光祭典",
+		"kirameki_festival_coat": "闪光祭典(外套)",
+
+		// 剧情/舞台服
+		"chapter0_live":        "序章Live",
+		"chapter0_pajamas":     "序章睡衣",
+		"romeo":                "罗密欧",
+		"juliet":               "朱丽叶",
+
+		// 特殊联动/企划
+		"michelle":             "米歇尔(兔子玩偶服)",
+		"michelle_ranger":      "米歇尔·游侠(兔子玩偶服)",
+		"miko":                 "巫女服",
+		"fantasy":              "幻想/异世界主题",
+		"fantasy_01":           "幻想01",
+		"delta":                "Delta变体服",
+		"expose":               "《EXPOSE》演出服",
+		"ranger":               "游侠服",
+		"chispa":               "CHiSPA乐队服",
+		"sumimi":               "Sumimi企划服",
+		"nfo01":                "《NFO》游戏内Avatar服",
+		"boss":                 "Boss服",
+		"robot":                "机器人服",
+
+		// 系统基础服
+		"live_default":         "初始打歌服",
+		"live_practice":        "练习服",
+		"live_sr_01":           "Live SR",
+		"live_ssr_01":          "Live SSR",
+		"vocal_limited_sr":     "Vocal限定SR",
+		"vocal_limited_ssr":    "Vocal限定SSR",
+	}
+
+	if name, ok := exactMatches[suffix]; ok {
+		return name
+	}
+
+	// 2. 模式匹配（使用正则）
+
+	// 愚人节：YYYYaf 或 YYYY_af
+	if matches := regexp.MustCompile(`^(\d{4})af$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		return matches[1] + "愚人节"
+	}
+
+	// 年份+基础服装+变体：如 casual-2023-penlight, casual-2023-nocap
+	if matches := regexp.MustCompile(`^(.+)-(\d{4})-(.+)$`).FindStringSubmatch(suffix); len(matches) > 3 {
+		baseName := translateCostumeSuffix(matches[1], eventNames)
+		if baseName != "" {
+			variantName := translateVariant(matches[3])
+			return fmt.Sprintf("%s(%s)(%s)", baseName, matches[2], variantName)
+		}
+	}
+
+	// 年份+基础服装：如 casual-2023, school_winter-2022
+	if matches := regexp.MustCompile(`^(.+)-(\d{4})$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		baseName := translateCostumeSuffix(matches[1], eventNames)
+		if baseName != "" {
+			return fmt.Sprintf("%s(%s)", baseName, matches[2])
+		}
+	}
+
+	// 年份前缀+基础服装：如 2024_furisode, 2019_furisode
+	if matches := regexp.MustCompile(`^(\d{4})_(.+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		baseName := translateCostumeSuffix(matches[2], eventNames)
+		if baseName != "" {
+			return fmt.Sprintf("%s(%s)", baseName, matches[1])
+		}
+	}
+
+	// 章节：chapterX_live, chapterX_pajamas
+	if matches := regexp.MustCompile(`^chapter(\d+)_(.+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		chapterNum := matches[1]
+		costumeType := matches[2]
+		typeName := ""
+		switch costumeType {
+		case "live":
+			typeName = "Live"
+		case "pajamas":
+			typeName = "睡衣"
+		default:
+			typeName = costumeType
+		}
+		if chapterNum == "0" {
+			return "序章" + typeName
+		}
+		return fmt.Sprintf("第%s章%s", chapterNum, typeName)
+	}
+
+	// 活动服装：event_XXX（无 _story_ 后缀）
+	if matches := regexp.MustCompile(`^event_?(\d+)$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		eventID, err := strconv.Atoi(matches[1])
+		if err == nil {
+			if eventName, ok := eventNames[eventID]; ok {
+				return eventName
+			}
+			return fmt.Sprintf("活动%s", matches[1])
+		}
+	}
+
+	// 活动剧情：event_XXX_story_YY 或 eventXXX_storyYY
+	if matches := regexp.MustCompile(`^event_?(\d+)_story_?(\w+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		eventID, err := strconv.Atoi(matches[1])
+		if err == nil {
+			if eventName, ok := eventNames[eventID]; ok {
+				return fmt.Sprintf("%s(剧情%s)", eventName, matches[2])
+			}
+			return fmt.Sprintf("活动%s(剧情%s)", matches[1], matches[2])
+		}
+	}
+
+	// 活动卡牌：live_event_XXX_稀有度
+	if matches := regexp.MustCompile(`^live_event_(\d+)_(r|sr|ssr|ur)$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		eventID, err := strconv.Atoi(matches[1])
+		if err == nil {
+			if eventName, ok := eventNames[eventID]; ok {
+				return fmt.Sprintf("%s(%s)", eventName, strings.ToUpper(matches[2]))
+			}
+			return fmt.Sprintf("活动%s(%s)", matches[1], strings.ToUpper(matches[2]))
+		}
+	}
+
+	// 联动：collabo_XXX
+	if strings.HasPrefix(suffix, "collabo") {
+		return "联动服"
+	}
+
+	// 梦想祭：dream_festival_XXX
+	if strings.HasPrefix(suffix, "dream_festival") {
+		return "梦想祭"
+	}
+
+	// 生日：birthday_XXX
+	if strings.HasPrefix(suffix, "birthday") {
+		return "生日限定"
+	}
+
+	// 总选举：Xth_general_election_r 或 general_election
+	if strings.Contains(suffix, "general_election") {
+		if matches := regexp.MustCompile(`(\d+).*general_election`).FindStringSubmatch(suffix); len(matches) > 1 {
+			return fmt.Sprintf("第%s届总选举", matches[1])
+		}
+		return "总选举"
+	}
+
+	// 乐队故事：band_story_X
+	if matches := regexp.MustCompile(`^band_story_(\d+)$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		return fmt.Sprintf("乐队故事%s", matches[1])
+	}
+
+	// 特定故事：story_XX 或 story_XX-YYYY
+	if matches := regexp.MustCompile(`^story_(\d+)(-.*)?$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		return fmt.Sprintf("故事%s", matches[1])
+	}
+
+	// 初音联动：miku_XXX
+	if strings.HasPrefix(suffix, "miku_") {
+		mikuSongs := map[string]string{
+			"miku_shinkai":    "深海少女",
+			"miku_migikata":   "右肩之蝶",
+			"miku_rettou":     "左肩之蝶",
+			"miku_alien":      "Alien Alien",
+			"miku_lostone":    "Lost One的号哭",
+			"miku_romecin":    "罗密欧与辛德瑞拉",
+			"miku_nocturnality": "夜之蝶",
+		}
+		if name, ok := mikuSongs[suffix]; ok {
+			return "初音联动·" + name
+		}
+		return "初音联动"
+	}
+
+	// 角色专属：other-XX
+	if matches := regexp.MustCompile(`other-(\d+)$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		return fmt.Sprintf("角色专属%s", matches[1])
+	}
+
+	// 振袖年份：2019_furisode 等（已在上面处理）
+
+	// 愚人节变体：2021af 等（已在上面处理）
+
+	// 3. 尝试从硬编码表中查找基础部分
+	baseCostumes := map[string]string{
+		"casual":      "常服",
+		"school":      "校服",
+		"pajamas":     "睡衣",
+		"swimsuit":    "泳装",
+		"yukata":      "浴衣",
+		"halloween":   "万圣节",
+		"christmas":   "圣诞",
+		"furisode":    "振袖",
+		"arbeit":      "打工服",
+		"expose":      "《EXPOSE》演出服",
+		"fantasy":     "幻想/异世界主题",
+		"delta":       "Delta变体服",
+		"miko":        "巫女服",
+		"apron":       "围裙",
+		"store":       "店员服",
+		"tracksuit":   "运动服",
+		"garupa":      "Garupa",
+		"popipa":      "Popipa",
+		"anime":       "动画",
+		"michelle":    "米歇尔(兔子玩偶服)",
+		"ranger":      "游侠服",
+		"cafe":        "咖啡厅",
+		"fast_food":   "快餐",
+		"gym":         "体操",
+		"chairperson": "学生会长",
+		"memorial":    "纪念",
+		"stage":       "舞台",
+		"practice":    "练习",
+		"live":        "Live",
+		"fes":         "祭典",
+		"boss":        "Boss服",
+		"robot":       "机器人服",
+		"chispa":      "CHiSPA乐队服",
+		"sumimi":      "Sumimi企划服",
+		"nfo":         "《NFO》游戏内Avatar服",
+		"wd":          "白色情人节",
+	}
+
+	// 尝试匹配基础词
+	for baseKey, baseName := range baseCostumes {
+		if strings.Contains(suffix, baseKey) {
+			return baseName
+		}
+	}
+
+	return ""
 }
 
 // GetChara 获取指定角色的详细信息
@@ -223,6 +987,22 @@ func (c *Client) getLive2dAssets(ctx context.Context) (map[string]string, error)
 	}
 
 	return live2dAssets, nil
+}
+
+// GetLive2dAssets 获取 Live2D 资源映射（公开方法）.
+func (c *Client) GetLive2dAssets(ctx context.Context) (map[string]string, error) {
+	return c.getLive2dAssets(ctx)
+}
+
+// GetAssetServer 获取指定服务器的配置.
+func (c *Client) GetAssetServer(tag string) (config.AssetServerConfig, bool) {
+	s, ok := c.assetServers[tag]
+	return s, ok
+}
+
+// HTTPClient 获取 HTTP 客户端.
+func (c *Client) HTTPClient() *http.Client {
+	return c.httpClient
 }
 
 func isCharaCostume(costume string, charaID int) bool {
