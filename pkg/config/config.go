@@ -13,6 +13,14 @@ type AssetServerConfig struct {
 	AssetsIndexURL string // 资源索引 API URL
 }
 
+// NamingMode 表示文件夹命名模式.
+type NamingMode int
+
+const (
+	NamingModeChinese NamingMode = iota // 使用中文命名
+	NamingModeOriginal                  // 使用原始文件名
+)
+
 // Config 表示程序的配置结构.
 type Config struct {
 	// 路径配置
@@ -34,6 +42,9 @@ type Config struct {
 	// 下载配置
 	MaxConcurrentDownloads int // 单个模型下载时的最大并发文件下载数
 	MaxConcurrentModels    int // 最大并发模型下载数
+
+	// 命名配置
+	NamingMode NamingMode // 文件夹命名模式
 }
 
 var (
@@ -83,6 +94,9 @@ func DefaultConfig() *Config {
 		// 下载配置
 		MaxConcurrentDownloads: 20,
 		MaxConcurrentModels:    3,
+
+		// 命名配置
+		NamingMode: NamingModeChinese,
 	}
 }
 
