@@ -12,7 +12,6 @@ import (
 
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/config"
 	"github.com/A-kirami/bestdori-live2d-downloader/pkg/model"
-	"github.com/A-kirami/bestdori-live2d-downloader/pkg/version"
 
 	"slices"
 
@@ -860,11 +859,7 @@ func (m *Model) View() string {
 	s.WriteString("\n")
 	s.WriteString(titleStyle.Render("Bestdori Live2D 下载器"))
 	s.WriteString("\n")
-	namingModeStr := "映射后"
-	if m.NamingMode == config.NamingModeOriginal {
-		namingModeStr = "原始"
-	}
-	s.WriteString(helpStyle(fmt.Sprintf("版本: %s | 作者: Akirami | 命名: %s", version.GetVersionInfo(), namingModeStr)))
+	s.WriteString(helpStyle("版本: v1.5.0 | 作者: Akirami | Fre2C分支版本"))
 	s.WriteString("\n\n")
 
 	switch m.State {
@@ -891,11 +886,15 @@ func (m *Model) View() string {
 		s.WriteString(helpStyle("按 Esc 或 Ctrl+C 退出"))
 
 	case StateList:
-		// 自定义标题
+		// 自定义标题（包含命名模式）
+		namingModeStr := "映射后"
+		if m.NamingMode == config.NamingModeOriginal {
+			namingModeStr = "原始"
+		}
 		if m.CurrentCharaName != "" {
-			title := fmt.Sprintf("选择要下载的 Live2D 模型 - %s", m.CurrentCharaName)
+			title := fmt.Sprintf("选择要下载的 Live2D 模型 - %s | 命名: %s", m.CurrentCharaName, namingModeStr)
 			if m.ExtraCharaName != "" {
-				title = fmt.Sprintf("%s (%s)", title, m.ExtraCharaName)
+				title = fmt.Sprintf("%s (%s) | 命名: %s", m.CurrentCharaName, m.ExtraCharaName, namingModeStr)
 			}
 			s.WriteString(titleStyle.Render(title))
 			s.WriteString("\n\n")

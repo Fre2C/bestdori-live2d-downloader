@@ -17,7 +17,7 @@
 
 ### 直接使用
 
-1. 从 [Releases](https://github.com/A-kirami/bestdori-live2d-downloader/releases) 页面下载最新版本的可执行文件
+1. 从 [Releases](https://github.com/Fre2C/bestdori-live2d-downloader/releases) 页面下载最新版本的可执行文件
 2. 运行程序：
 
    ```bash
@@ -34,7 +34,7 @@
 2. 克隆仓库：
 
    ```bash
-   git clone https://github.com/A-kirami/bestdori-live2d-downloader.git
+   git clone https://github.com/Fre2C/bestdori-live2d-downloader.git
    cd bestdori-live2d-downloader
    ```
 
