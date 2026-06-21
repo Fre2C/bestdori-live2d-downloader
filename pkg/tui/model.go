@@ -134,6 +134,12 @@ type charaListItem struct {
 
 // Title 返回角色列表项的标题（带颜色）.
 func (i charaListItem) Title() string {
+	// 特殊角色：米歇尔/奥泽美咲 (ID 015)
+	if i.id == 15 {
+		michelleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(i.color))
+		misakiStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#DD33CC"))
+		return michelleStyle.Render("#015 米歇尔") + "/" + misakiStyle.Render("奥泽美咲")
+	}
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(i.color))
 	return style.Render(fmt.Sprintf("#%03d %s", i.id, i.name))
 }
