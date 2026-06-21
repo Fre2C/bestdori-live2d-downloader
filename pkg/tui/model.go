@@ -1067,14 +1067,14 @@ func (m *Model) SetLive2DList(items []*model.Live2dAsset) {
 func (m *Model) GetSelectedItems() []*model.Live2dAsset {
 	// 使用 map 来确保唯一性
 	unique := make(map[string]*model.Live2dAsset)
-	for _, id := range m.SelectedIDs {
-		if id < len(m.Live2dList.Items()) {
-			if item, ok := m.Live2dList.Items()[id].(listItem); ok {
-				if item.asset != nil {
-					unique[item.asset.String()] = item.asset
-				} else {
-					unique[item.title] = nil
-				}
+	// 直接检查每个 item 的 selected 字段，不依赖位置索引
+	// 这样即使列表被过滤/恢复，选中状态也不会丢失
+	for _, item := range m.Live2dList.Items() {
+		if li, ok := item.(listItem); ok && li.selected {
+			if li.asset != nil {
+				unique[li.asset.String()] = li.asset
+			} else {
+				unique[li.title] = nil
 			}
 		}
 	}
