@@ -218,7 +218,7 @@ type CharacterInfo = model.CharacterInfo
 
 // 服装类型常量.
 const (
-	costumePajamas   = "pajamas"
+	costumePajamas   = "睡衣"
 	costumeHalloween = "万圣节"
 )
 
@@ -612,19 +612,76 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 		}
 	}
 
+	// 预计算每个角色+活动的剧情编号数量
+	charaEventStoryNumbers := make(map[string]map[string]bool)
+	storyWithNumRe := regexp.MustCompile(`^event_?(\d+)_story_(\w+)$`)
+	storyNoNumRe := regexp.MustCompile(`^event_?(\d+)_story$`)
+	for live2dName := range live2dNames {
+		proc := live2dName
+		if strings.HasPrefix(proc, "bili_") {
+			proc = strings.TrimPrefix(proc, "bili_")
+		}
+		parts := strings.SplitN(proc, "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		charaID := parts[0]
+		suffix := parts[1]
+		if m := storyWithNumRe.FindStringSubmatch(suffix); len(m) > 2 {
+			if _, err := strconv.Atoi(m[1]); err == nil {
+				num := strings.TrimLeft(m[2], "0")
+				if num == "" {
+					num = "1"
+				}
+				key := charaID + ":" + m[1]
+				if charaEventStoryNumbers[key] == nil {
+					charaEventStoryNumbers[key] = make(map[string]bool)
+				}
+				charaEventStoryNumbers[key][num] = true
+			}
+		} else if m := storyNoNumRe.FindStringSubmatch(suffix); len(m) > 1 {
+			if _, err := strconv.Atoi(m[1]); err == nil {
+				key := charaID + ":" + m[1]
+				if charaEventStoryNumbers[key] == nil {
+					charaEventStoryNumbers[key] = make(map[string]bool)
+				}
+				charaEventStoryNumbers[key]["1"] = true
+			}
+		}
+	}
+	charaEventStoryCounts := make(map[string]int)
+	for key, nums := range charaEventStoryNumbers {
+		charaEventStoryCounts[key] = len(nums)
+	}
+
 	for live2dName := range live2dNames {
 		if _, exists := names[live2dName]; exists {
 			continue
 		}
-		// 提取后缀（去掉角色ID前缀，如 003_casual -> casual）
-		parts := strings.SplitN(live2dName, "_", 2)
+		// 处理 bili_ 前缀
+		nameToProcess := live2dName
+		if strings.HasPrefix(live2dName, "bili_") {
+			nameToProcess = strings.TrimPrefix(live2dName, "bili_")
+		}
+		parts := strings.SplitN(nameToProcess, "_", 2)
 		if len(parts) < 2 {
 			continue
 		}
 		suffix := parts[1]
 
+		// 年份后缀 API 映射查找
+		if yearMatch := regexp.MustCompile(`^(.+)-(\d{4})$`).FindStringSubmatch(suffix); len(yearMatch) > 2 {
+			baseSuffix := yearMatch[1]
+			year := yearMatch[2]
+			baseLive2dName := parts[0] + "_" + baseSuffix
+			if baseName, ok := names[baseLive2dName]; ok && baseName != "" {
+				names[live2dName] = fmt.Sprintf("%s(%s)", baseName, year)
+				continue
+			}
+		}
+
 		// 使用模式匹配翻译
-		if translated := translateCostumeSuffix(suffix, eventNames); translated != "" {
+		if translated := translateCostumeSuffixWithStoryCount(suffix, eventNames, charaEventStoryCounts, parts[0]); translated != "" {
 			names[live2dName] = translated
 		}
 	}
@@ -643,6 +700,53 @@ func translateVariant(variant string) string {
 		return name
 	}
 	return variant
+}
+
+// translateCostumeSuffixWithStoryCount 带剧情数量信息的翻译.
+// 按角色+活动统计，单剧情不加编号，多剧情始终加编号.
+func translateCostumeSuffixWithStoryCount(suffix string, eventNames map[int]string, charaEventStoryCounts map[string]int, charaID string) string {
+	// 活动剧情：event_XXX_story_YY
+	if matches := regexp.MustCompile(`^event_?(\d+)_story_?(\w+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
+		eventID, err := strconv.Atoi(matches[1])
+		if err == nil {
+			storyNum := matches[2]
+			storyNum = strings.TrimLeft(storyNum, "0")
+			if storyNum == "" {
+				storyNum = "1"
+			}
+			key := charaID + ":" + matches[1]
+			if charaEventStoryCounts[key] > 1 {
+				if eventName, ok := eventNames[eventID]; ok {
+					return fmt.Sprintf("%s·剧情%s", eventName, storyNum)
+				}
+				return fmt.Sprintf("活动%s·剧情%s", matches[1], storyNum)
+			}
+			if eventName, ok := eventNames[eventID]; ok {
+				return fmt.Sprintf("%s·剧情", eventName)
+			}
+			return fmt.Sprintf("活动%s·剧情", matches[1])
+		}
+	}
+
+	// 活动剧情（无编号）：event_XXX_story
+	if matches := regexp.MustCompile(`^event_?(\d+)_story$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		eventID, err := strconv.Atoi(matches[1])
+		if err == nil {
+			key := charaID + ":" + matches[1]
+			if charaEventStoryCounts[key] > 1 {
+				if eventName, ok := eventNames[eventID]; ok {
+					return fmt.Sprintf("%s·剧情1", eventName)
+				}
+				return fmt.Sprintf("活动%s·剧情1", matches[1])
+			}
+			if eventName, ok := eventNames[eventID]; ok {
+				return fmt.Sprintf("%s·剧情", eventName)
+			}
+			return fmt.Sprintf("活动%s·剧情", matches[1])
+		}
+	}
+
+	return translateCostumeSuffix(suffix, eventNames)
 }
 
 // translateCostumeSuffix 根据后缀模式翻译服装名称
@@ -855,7 +959,10 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 
 	// 特定故事：story_XX 或 story_XX-YYYY
 	if matches := regexp.MustCompile(`^story_(\d+)(-.*)?$`).FindStringSubmatch(suffix); len(matches) > 1 {
-		return fmt.Sprintf("故事%s", matches[1])
+		if matches[1] == "01" || matches[1] == "1" {
+			return "练习服"
+		}
+		return ""
 	}
 
 	// 初音联动：miku_XXX
