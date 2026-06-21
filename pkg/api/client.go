@@ -220,6 +220,7 @@ type CharacterInfo = model.CharacterInfo
 const (
 	costumePajamas   = "睡衣"
 	costumeHalloween = "万圣节"
+	costumePractice  = "剧情初始服装"
 )
 
 // defaultCharaColors 没有颜色代码的角色的默认颜色映射.
@@ -614,21 +615,18 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 
 	// 预计算每个角色+活动的剧情编号数量
 	charaEventStoryNumbers := make(map[string]map[string]bool)
-	storyWithNumRe := regexp.MustCompile(`^event_?(\d+)_story_(\w+)$`)
+	storyWithNumRe := regexp.MustCompile(`^event_?(\d+)_story_?(\w+)$`)
 	storyNoNumRe := regexp.MustCompile(`^event_?(\d+)_story$`)
 	for live2dName := range live2dNames {
-		proc := live2dName
-		if strings.HasPrefix(proc, "bili_") {
-			proc = strings.TrimPrefix(proc, "bili_")
-		}
+		proc := strings.TrimPrefix(live2dName, "bili_")
 		parts := strings.SplitN(proc, "_", 2)
 		if len(parts) < 2 {
 			continue
 		}
 		charaID := parts[0]
 		suffix := parts[1]
-		if m := storyWithNumRe.FindStringSubmatch(suffix); len(m) > 2 {
-			if _, err := strconv.Atoi(m[1]); err == nil {
+		if m := storyWithNumRe.FindStringSubmatch(suffix); len(m) > 2 { //nolint:nestif // 复杂的剧情编号统计逻辑
+			if _, parseErr := strconv.Atoi(m[1]); parseErr == nil {
 				num := strings.TrimLeft(m[2], "0")
 				if num == "" {
 					num = "1"
@@ -639,9 +637,9 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 				}
 				charaEventStoryNumbers[key][num] = true
 			}
-		} else if m := storyNoNumRe.FindStringSubmatch(suffix); len(m) > 1 {
-			if _, err := strconv.Atoi(m[1]); err == nil {
-				key := charaID + ":" + m[1]
+		} else if n := storyNoNumRe.FindStringSubmatch(suffix); len(n) > 1 {
+			if _, parseErr := strconv.Atoi(n[1]); parseErr == nil {
+				key := charaID + ":" + n[1]
 				if charaEventStoryNumbers[key] == nil {
 					charaEventStoryNumbers[key] = make(map[string]bool)
 				}
@@ -659,10 +657,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 			continue
 		}
 		// 处理 bili_ 前缀
-		nameToProcess := live2dName
-		if strings.HasPrefix(live2dName, "bili_") {
-			nameToProcess = strings.TrimPrefix(live2dName, "bili_")
-		}
+		nameToProcess := strings.TrimPrefix(live2dName, "bili_")
 		parts := strings.SplitN(nameToProcess, "_", 2)
 		if len(parts) < 2 {
 			continue
@@ -681,7 +676,12 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 		}
 
 		// 使用模式匹配翻译
-		if translated := translateCostumeSuffixWithStoryCount(suffix, eventNames, charaEventStoryCounts, parts[0]); translated != "" {
+		if translated := translateCostumeSuffixWithStoryCount(
+			suffix,
+			eventNames,
+			charaEventStoryCounts,
+			parts[0],
+		); translated != "" {
 			names[live2dName] = translated
 		}
 	}
@@ -704,7 +704,14 @@ func translateVariant(variant string) string {
 
 // translateCostumeSuffixWithStoryCount 带剧情数量信息的翻译.
 // 按角色+活动统计，单剧情不加编号，多剧情始终加编号.
-func translateCostumeSuffixWithStoryCount(suffix string, eventNames map[int]string, charaEventStoryCounts map[string]int, charaID string) string {
+//
+//nolint:gocognit,nestif // 复杂的剧情翻译逻辑
+func translateCostumeSuffixWithStoryCount(
+	suffix string,
+	eventNames map[int]string,
+	charaEventStoryCounts map[string]int,
+	charaID string,
+) string {
 	// 活动剧情：event_XXX_story_YY
 	if matches := regexp.MustCompile(`^event_?(\d+)_story_?(\w+)$`).FindStringSubmatch(suffix); len(matches) > 2 {
 		eventID, err := strconv.Atoi(matches[1])
@@ -788,7 +795,7 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 		"arbeit":                 "打工服",
 		"store":                  "店员服",
 		"chairperson_casual":     "学生会长服",
-		"practice_clothes":       "练习服",
+		"practice_clothes":       costumePractice,
 		"stage_costume":          "舞台服装",
 		"wd_practice":            "白色情人节练习服",
 		"garupa_t":               "Garupa T恤",
@@ -834,7 +841,7 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 
 		// 系统基础服
 		"live_default":      "初始打歌服",
-		"live_practice":     "练习服",
+		"live_practice":     costumePractice,
 		"live_sr_01":        "Live SR",
 		"live_ssr_01":       "Live SSR",
 		"vocal_limited_sr":  "Vocal限定SR",
@@ -960,7 +967,10 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 	// 特定故事：story_XX 或 story_XX-YYYY
 	if matches := regexp.MustCompile(`^story_(\d+)(-.*)?$`).FindStringSubmatch(suffix); len(matches) > 1 {
 		if matches[1] == "01" || matches[1] == "1" {
-			return "练习服"
+			return costumePractice
+		}
+		if matches[1] == "03" {
+			return "米歇尔玩偶服"
 		}
 		return ""
 	}
@@ -984,6 +994,14 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 
 	// 角色专属：other-XX
 	if matches := regexp.MustCompile(`other-(\d+)$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		// other-12 是活动小丑
+		if matches[1] == "12" {
+			return "活动小丑"
+		}
+		// other-41 是愚人节
+		if matches[1] == "41" {
+			return "愚人节"
+		}
 		return fmt.Sprintf("角色专属%s", matches[1])
 	}
 
