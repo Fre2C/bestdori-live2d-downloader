@@ -182,7 +182,7 @@ func TestLive2dBuilder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := defaultServerConfig()
-			builder := downloader.NewLive2dBuilder(tt.path, &cfg, tt.buildData, d, "test_model")
+			builder := downloader.NewLive2dBuilder(tt.path, &cfg, tt.buildData, d, "test_model", "测试模型")
 			require.NotNil(t, builder, "NewLive2dBuilder() should not return nil")
 
 			constructErr := builder.Construct()
