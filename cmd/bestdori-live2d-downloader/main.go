@@ -133,6 +133,15 @@ func (a *App) lookupCostumeName(live2dName, costume string) string {
 	return costume
 }
 
+// sanitizeFilename 移除或替换 Windows 文件名中禁止的字符.
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		"<", "＜", ">", "＞", ":", "：", `"`, "'",
+		"/", "／", `\`, "＼", "|", "｜", "?", "？", "*", "＊",
+	)
+	return replacer.Replace(name)
+}
+
 // loadCharacterList 加载角色列表并发送到 TUI.
 func (a *App) loadCharacterList() {
 	charaList, err := a.apiClient.GetCharacterInfoList(a.ctx)
@@ -227,11 +236,11 @@ func (a *App) getLive2dPathChinese(live2dName string, charaID int, costume strin
 	// 获取角色中文名
 	charaName := fmt.Sprintf("chara_%03d", charaID)
 	if name, ok := a.charaNames[strconv.Itoa(charaID)]; ok && name != "" {
-		charaName = name
+		charaName = sanitizeFilename(name)
 	}
 
 	// 获取服装中文名（使用完整的 live2dName 进行查找）
-	costumeName := a.lookupCostumeName(live2dName, costume)
+	costumeName := sanitizeFilename(a.lookupCostumeName(live2dName, costume))
 
 	path := filepath.Join(config.Get().Live2dSavePath, charaName, costumeName)
 	log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功（中文命名）")
@@ -323,10 +332,10 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 	a.loadCostumeNames()
 	charaName := fmt.Sprintf("chara_%03d", charaID)
 	if name, ok := a.charaNames[strconv.Itoa(charaID)]; ok && name != "" {
-		charaName = name
+		charaName = sanitizeFilename(name)
 	}
 	// 使用完整的 live2dName 查找中文名（与 getLive2dPathChinese 一致）
-	costumeName := a.lookupCostumeName(live2dName, costume)
+	costumeName := sanitizeFilename(a.lookupCostumeName(live2dName, costume))
 	chinesePath := filepath.Join(savePath, charaName, costumeName)
 	if chinesePath != currentPath {
 		if _, err := os.Stat(filepath.Join(chinesePath, "model.json")); err == nil {
@@ -353,7 +362,7 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 				fallbackName, _ = characterNames[1].(string)
 			}
 			if fallbackName != "" {
-				originalPath := filepath.Join(savePath, fallbackName, costume)
+				originalPath := filepath.Join(savePath, sanitizeFilename(fallbackName), costume)
 				if originalPath != currentPath {
 					if _, statErr := os.Stat(filepath.Join(originalPath, "model.json")); statErr == nil {
 						return originalPath, true
