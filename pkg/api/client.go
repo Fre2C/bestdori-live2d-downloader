@@ -227,7 +227,7 @@ type CharacterInfo = model.CharacterInfo
 const (
 	costumePajamas   = "睡衣"
 	costumeHalloween = "万圣节"
-	costumePractice  = "练习服"
+	costumePractice  = "剧情初始服装"
 )
 
 // defaultCharaColors 没有颜色代码的角色的默认颜色映射.
@@ -622,7 +622,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 
 	// 预计算每个角色+活动的剧情编号数量
 	charaEventStoryNumbers := make(map[string]map[string]bool)
-	storyWithNumRe := regexp.MustCompile(`^event_?(\d+)_story_(\w+)$`)
+	storyWithNumRe := regexp.MustCompile(`^event_?(\d+)_story_?(\w+)$`)
 	storyNoNumRe := regexp.MustCompile(`^event_?(\d+)_story$`)
 	for live2dName := range live2dNames {
 		proc := strings.TrimPrefix(live2dName, "bili_")
@@ -994,6 +994,9 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 		if matches[1] == "01" || matches[1] == "1" {
 			return costumePractice
 		}
+		if matches[1] == "03" {
+			return "米歇尔玩偶服"
+		}
 		return ""
 	}
 
@@ -1016,6 +1019,14 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 
 	// 角色专属：other-XX
 	if matches := regexp.MustCompile(`other-(\d+)$`).FindStringSubmatch(suffix); len(matches) > 1 {
+		// other-12 是活动小丑
+		if matches[1] == "12" {
+			return "活动小丑"
+		}
+		// other-41 是愚人节
+		if matches[1] == "41" {
+			return "愚人节"
+		}
 		return fmt.Sprintf("角色专属%s", matches[1])
 	}
 
