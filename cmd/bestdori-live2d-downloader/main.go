@@ -139,7 +139,9 @@ func sanitizeFilename(name string) string {
 		"<", "＜", ">", "＞", ":", "：", `"`, "'",
 		"/", "／", `\`, "＼", "|", "｜", "?", "？", "*", "＊",
 	)
-	return replacer.Replace(name)
+	name = replacer.Replace(name)
+	name = strings.TrimRight(name, ". ")
+	return name
 }
 
 // loadCharacterList 加载角色列表并发送到 TUI.
@@ -287,7 +289,7 @@ func (a *App) getLive2dPathOriginal(_ string, charaID int, costume string, costu
 		return path, nil
 	}
 
-	path := filepath.Join(config.Get().Live2dSavePath, charaName, costume)
+	path := filepath.Join(config.Get().Live2dSavePath, sanitizeFilename(charaName), sanitizeFilename(costume))
 	log.DefaultLogger.Info().Str("path", path).Msg("获取Live2D路径成功")
 	return path, nil
 }
@@ -362,7 +364,7 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 				fallbackName, _ = characterNames[1].(string)
 			}
 			if fallbackName != "" {
-				originalPath := filepath.Join(savePath, sanitizeFilename(fallbackName), costume)
+				originalPath := filepath.Join(savePath, sanitizeFilename(fallbackName), sanitizeFilename(costume))
 				if originalPath != currentPath {
 					if _, statErr := os.Stat(filepath.Join(originalPath, "model.json")); statErr == nil {
 						return originalPath, true
@@ -373,7 +375,7 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 	}
 
 	// 尝试原始命名路径（使用角色ID）
-	idPath := filepath.Join(savePath, fmt.Sprintf("chara_%03d", charaID), costumePart)
+	idPath := filepath.Join(savePath, fmt.Sprintf("chara_%03d", charaID), sanitizeFilename(costumePart))
 	if idPath != currentPath {
 		if _, statErr := os.Stat(filepath.Join(idPath, "model.json")); statErr == nil {
 			return idPath, true
@@ -629,11 +631,13 @@ func (a *App) getCharaNames(id int) (string, string) {
 		defaultName := fmt.Sprintf("角色%d", id)
 		return defaultName, defaultName
 	}
+	firstName = strings.TrimSpace(firstName)
 
 	displayName, ok := characterNames[3].(string)
 	if !ok || displayName == "" {
 		displayName = firstName
 	}
+	displayName = strings.TrimSpace(displayName)
 
 	return firstName, displayName
 }
@@ -769,6 +773,7 @@ func (a *App) downloadModel(
 			return
 		}
 		log.DefaultLogger.Error().Str("model", name).Err(err).Msg("下载失败")
+		a.tuiModel.SendError(name, err)
 	} else {
 		completed[name] = true
 		// 只有成功才更新总体进度
