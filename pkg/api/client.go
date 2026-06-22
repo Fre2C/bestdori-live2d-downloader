@@ -173,6 +173,8 @@ func (c *Client) GetCharaRoster(ctx context.Context) (map[string]any, error) {
 // 返回:
 //   - map[string]string: 角色ID到中文全名的映射
 //   - error: 错误信息
+//
+//nolint:gocognit // 多语言优先级处理固有复杂度
 func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, error) {
 	url := fmt.Sprintf("%s/all.5.json", c.charaRosterURL)
 	data, err := c.FetchData(ctx, url, "chara_names_5.json")
@@ -208,6 +210,11 @@ func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, erro
 		if chineseName != "" {
 			names[charaID] = chineseName
 		}
+	}
+
+	// 特殊角色：米歇尔/奥泽美咲 (ID 15)
+	if name, ok := names["15"]; ok {
+		names["15"] = name + "/奥泽 美咲"
 	}
 
 	return names, nil
@@ -653,9 +660,6 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 	}
 
 	for live2dName := range live2dNames {
-		if _, exists := names[live2dName]; exists {
-			continue
-		}
 		// 处理 bili_ 前缀
 		nameToProcess := strings.TrimPrefix(live2dName, "bili_")
 		parts := strings.SplitN(nameToProcess, "_", 2)
@@ -663,6 +667,27 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 			continue
 		}
 		suffix := parts[1]
+
+		// event_XXX_story_YY 模式：始终使用活动翻译（覆盖 API 卡牌描述）
+		if storyWithNumRe.MatchString(suffix) || storyNoNumRe.MatchString(suffix) {
+			if translated := translateCostumeSuffixWithStoryCount(
+				suffix,
+				eventNames,
+				charaEventStoryCounts,
+				parts[0],
+			); translated != "" {
+				if apiName, ok := names[live2dName]; ok && apiName != translated {
+					names[live2dName] = translated + "(" + apiName + ")"
+				} else {
+					names[live2dName] = translated
+				}
+				continue
+			}
+		}
+
+		if _, exists := names[live2dName]; exists {
+			continue
+		}
 
 		// 年份后缀 API 映射查找
 		if yearMatch := regexp.MustCompile(`^(.+)-(\d{4})$`).FindStringSubmatch(suffix); len(yearMatch) > 2 {
@@ -828,14 +853,14 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 		"michelle":        "米歇尔(兔子玩偶服)",
 		"michelle_ranger": "米歇尔·游侠(兔子玩偶服)",
 		"miko":            "巫女服",
-		"fantasy":         "幻想/异世界主题",
-		"fantasy_01":      "幻想01",
+		"fantasy":         "Neo Fantasy Online",
+		"fantasy_01":      "Neo Fantasy Online 01",
 		"delta":           "Delta变体服",
 		"expose":          "《EXPOSE》演出服",
 		"ranger":          "游侠服",
 		"chispa":          "CHiSPA乐队服",
 		"sumimi":          "Sumimi企划服",
-		"nfo01":           "《NFO》游戏内Avatar服",
+		"nfo01":           "《NFO》游戏服装01",
 		"boss":            "Boss服",
 		"robot":           "机器人服",
 
@@ -1021,7 +1046,7 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 		"furisode":    "振袖",
 		"arbeit":      "打工服",
 		"expose":      "《EXPOSE》演出服",
-		"fantasy":     "幻想/异世界主题",
+		"fantasy":     "Neo Fantasy Online",
 		"delta":       "Delta变体服",
 		"miko":        "巫女服",
 		"apron":       "围裙",
@@ -1045,7 +1070,7 @@ func translateCostumeSuffix(suffix string, eventNames map[int]string) string {
 		"robot":       "机器人服",
 		"chispa":      "CHiSPA乐队服",
 		"sumimi":      "Sumimi企划服",
-		"nfo":         "《NFO》游戏内Avatar服",
+		"nfo":         "《NFO》游戏服装",
 		"wd":          "白色情人节",
 	}
 
