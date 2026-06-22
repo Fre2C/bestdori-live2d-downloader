@@ -771,9 +771,9 @@ func (a *App) downloadModel(
 		log.DefaultLogger.Error().Str("model", name).Err(err).Msg("下载失败")
 	} else {
 		completed[name] = true
+		// 只有成功才更新总体进度
+		a.tuiModel.UpdateTotalProgress()
 	}
-	// 无论成功还是失败，都更新总体进度
-	a.tuiModel.UpdateTotalProgress()
 	// 通知进度已更新
 	select {
 	case progressUpdated <- struct{}{}:

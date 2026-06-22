@@ -875,7 +875,7 @@ func (m *Model) View() string {
 	s.WriteString("\n")
 	s.WriteString(titleStyle.Render("Bestdori Live2D 下载器"))
 	s.WriteString("\n")
-	s.WriteString(helpStyle("版本: v1.5.2 | 作者: Akirami | Fre2C分支版本"))
+	s.WriteString(helpStyle("版本: v1.5.3 | 作者: Akirami | Fre2C分支版本"))
 	s.WriteString("\n\n")
 
 	switch m.State {
