@@ -208,7 +208,7 @@ func (c *Client) GetCharacterNames(ctx context.Context) (map[string]string, erro
 			chineseName, _ = charaNameList[1].(string)
 		}
 		if chineseName != "" {
-			names[charaID] = chineseName
+			names[charaID] = strings.TrimSpace(chineseName)
 		}
 	}
 
@@ -273,6 +273,7 @@ func (c *Client) GetCharacterInfoList(ctx context.Context) ([]CharacterInfo, err
 		if chineseName == "" {
 			continue
 		}
+		chineseName = strings.TrimSpace(chineseName)
 
 		colorCode, _ := charaInfo["colorCode"].(string)
 
@@ -343,16 +344,19 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 		// 获取各语言描述
 		if len(descList) > 0 {
 			nameInfo.Japanese, _ = descList[0].(string)
+			nameInfo.Japanese = strings.TrimSpace(nameInfo.Japanese)
 		}
 		if len(descList) > 1 {
 			nameInfo.English, _ = descList[1].(string)
+			nameInfo.English = strings.TrimSpace(nameInfo.English)
 		}
 		if len(descList) > 2 {
 			nameInfo.Chinese, _ = descList[2].(string) // 繁体中文
+			nameInfo.Chinese = strings.TrimSpace(nameInfo.Chinese)
 		}
 		if len(descList) > 3 {
 			if simplified, _ := descList[3].(string); simplified != "" {
-				nameInfo.Chinese = simplified // 简体中文优先
+				nameInfo.Chinese = strings.TrimSpace(simplified) // 简体中文优先
 			}
 		}
 
@@ -446,7 +450,7 @@ func (c *Client) GetCostumeNameInfo(ctx context.Context) (map[string]*CostumeNam
 				name, _ = nameList[1].(string)
 			}
 			if name != "" {
-				eventNames[eventID] = name
+				eventNames[eventID] = strings.TrimSpace(name)
 			}
 		}
 	}
@@ -523,7 +527,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 			desc, _ = descList[1].(string)
 		}
 		if desc != "" {
-			names[bundleName] = desc
+			names[bundleName] = strings.TrimSpace(desc)
 		}
 	}
 
@@ -615,7 +619,7 @@ func (c *Client) GetCostumeNames(ctx context.Context) (map[string]string, error)
 				name, _ = nameList[1].(string)
 			}
 			if name != "" {
-				eventNames[eventID] = name
+				eventNames[eventID] = strings.TrimSpace(name)
 			}
 		}
 	}
