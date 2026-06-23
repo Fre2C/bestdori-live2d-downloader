@@ -323,32 +323,6 @@ type UpdateCharaListMsg struct {
 	Characters []model.CharacterInfo // 角色信息列表
 }
 
-// handleInputState 处理输入状态下的消息.
-func (m *Model) handleInputState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == KeyEnter {
-		value := strings.TrimSpace(m.TextInput.Value())
-		if value == "" {
-			m.SetError("请输入 Live2D 模型名称")
-			return m, nil
-		}
-		m.State = StateLoading
-		select {
-		case m.SearchChan <- value:
-		default:
-		}
-		return m, m.Spinner.Tick
-	}
-	if msg.String() == KeyEsc {
-		m.State = StateCharaList
-		m.TextInput.Reset()
-		m.ClearError()
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.TextInput, cmd = m.TextInput.Update(msg)
-	return m, cmd
-}
-
 // handleLoadingState 处理加载状态下的消息.
 func (m *Model) handleLoadingState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == KeyEsc {
@@ -359,61 +333,51 @@ func (m *Model) handleLoadingState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleListState 处理列表状态下的消息.
-//
-//nolint:funlen // 包含多种状态处理
 func (m *Model) handleListState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// 过滤模式处理
 	if m.IsFiltering {
-		switch msg.String() {
-		case KeyEsc:
-			// 退出过滤模式，恢复完整列表（保留选择状态）
-			m.IsFiltering = false
-			m.FilterInput.Reset()
-			m.FilterInput.Blur()
-			m.restoreAllCostumeItemsWithSelection()
-			return m, nil
-		case "/":
-			// 在过滤模式下按 / 清空搜索内容
-			m.FilterInput.SetValue("")
-			m.applyFilter()
-			return m, nil
-		case " ":
-			// 在过滤模式下也可以选择/取消选择
-			if i, ok := m.Live2dList.SelectedItem().(listItem); ok {
-				m.toggleItemSelection(i)
-			}
-			return m, nil
-		case KeyUp, KeyDown:
-			// 在过滤模式下也可以导航
-			var cmd tea.Cmd
-			m.Live2dList, cmd = m.Live2dList.Update(msg)
-			return m, cmd
-		default:
-			// 让 textinput 处理按键（支持输入法）
-			var cmd tea.Cmd
-			m.FilterInput, cmd = m.FilterInput.Update(msg)
-			// 实时过滤
-			m.applyFilter()
-			return m, cmd
-		}
+		return m.handleListFilterState(msg)
 	}
+	return m.handleListNormalState(msg)
+}
 
+// handleListFilterState 处理过滤模式下的消息.
+func (m *Model) handleListFilterState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case KeyEsc:
+		m.IsFiltering = false
+		m.FilterInput.Reset()
+		m.FilterInput.Blur()
+		m.restoreAllCostumeItemsWithSelection()
+		return m, nil
+	case "/":
+		m.FilterInput.SetValue("")
+		m.applyFilter()
+		return m, nil
+	case " ":
+		if i, ok := m.Live2dList.SelectedItem().(listItem); ok {
+			m.toggleItemSelection(i)
+		}
+		return m, nil
+	case KeyUp, KeyDown:
+		var cmd tea.Cmd
+		m.Live2dList, cmd = m.Live2dList.Update(msg)
+		return m, cmd
+	default:
+		var cmd tea.Cmd
+		m.FilterInput, cmd = m.FilterInput.Update(msg)
+		m.applyFilter()
+		return m, cmd
+	}
+}
+
+// handleListNormalState 处理普通模式下的消息.
+func (m *Model) handleListNormalState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "/":
-		// 切换搜索模式
-		if m.IsFiltering {
-			// 退出搜索模式
-			m.IsFiltering = false
-			m.FilterInput.Reset()
-			m.FilterInput.Blur()
-			m.restoreAllCostumeItemsWithSelection()
-		} else {
-			// 进入搜索模式
-			m.IsFiltering = true
-			m.FilterInput.Focus()
-			m.AllCostumeItems = m.getAllListItems()
-			m.Live2dList.SetItems([]list.Item{})
-		}
+		m.IsFiltering = true
+		m.FilterInput.Focus()
+		m.AllCostumeItems = m.getAllListItems()
+		m.Live2dList.SetItems([]list.Item{})
 		return m, textinput.Blink
 	case " ":
 		if i, ok := m.Live2dList.SelectedItem().(listItem); ok {
@@ -438,7 +402,6 @@ func (m *Model) handleListState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case KeyEsc:
 		m.State = StateCharaList
 		m.Live2dList.Select(0)
-		// 清空下载项
 		m.Items = make(map[string]*DownloadItem)
 		m.ItemOrder = []string{}
 		m.updateDownloadList()
@@ -759,7 +722,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch m.State {
 	case StateInput:
-		return m.handleInputState(msg)
+		m.State = StateCharaList
+		return m.handleCharaListState(msg)
 	case StateCharaList:
 		return m.handleCharaListState(msg)
 	case StateLoading:
@@ -880,12 +844,7 @@ func (m *Model) View() string {
 	s.WriteString("\n\n")
 
 	switch m.State {
-	case StateInput:
-		// 直接跳回角色列表
-		m.State = StateCharaList
-		fallthrough
-
-	case StateCharaList:
+	case StateInput, StateCharaList:
 		// 自定义标题
 		s.WriteString(titleStyle.Render("选择角色"))
 		s.WriteString("\n\n")
