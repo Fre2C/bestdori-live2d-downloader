@@ -645,13 +645,21 @@ func (b *Live2dBuilder) getDisplayName() string {
 	return b.ModelName
 }
 
+// TotalFilesForBuildData 计算构建数据中的总文件数.
+func TotalFilesForBuildData(data *model.BuildData) int {
+	if data == nil {
+		return 0
+	}
+	return 1 + // model.moc
+		1 + // physics.json
+		len(data.Textures) +
+		len(data.Motions) +
+		len(data.Expressions)
+}
+
 // initializeDownloadProgress 初始化下载进度.
 func (b *Live2dBuilder) initializeDownloadProgress() {
-	totalFiles := 1 + // model.moc
-		1 + // physics.json
-		len(b.data.Textures) + // textures
-		len(b.data.Motions) + // motions
-		len(b.data.Expressions) // expressions
+	totalFiles := TotalFilesForBuildData(b.data)
 
 	log.DefaultLogger.Info().Str("modelName", b.ModelName).Int("totalFiles", totalFiles).Msg("需要下载的文件总数")
 

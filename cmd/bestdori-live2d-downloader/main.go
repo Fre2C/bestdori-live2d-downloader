@@ -144,6 +144,46 @@ func sanitizeFilename(name string) string {
 	return name
 }
 
+// parsedLive2d 解析后的 Live2D 名称.
+type parsedLive2d struct {
+	CharaID     int
+	CostumePart string
+	Costume     string
+}
+
+// parseLive2dName 解析 Live2D 名称为角色ID和服装部分.
+// 例如 "005_live_event_07_sr" → {CharaID: 5, CostumePart: "live_event_07_sr", Costume: "live_event_07_sr"}.
+func parseLive2dName(live2dName string) (*parsedLive2d, bool) {
+	parts := strings.Split(live2dName, "_")
+	if len(parts) < 2 {
+		return nil, false
+	}
+
+	foundIdx := -1
+	var charaID int
+	for i, p := range parts {
+		id, err := strconv.Atoi(p)
+		if err == nil {
+			foundIdx = i
+			charaID = id
+			break
+		}
+	}
+	if foundIdx == -1 || foundIdx >= len(parts)-1 {
+		return nil, false
+	}
+
+	prefix := strings.Join(parts[:foundIdx], "_")
+	costumePart := strings.Join(parts[foundIdx+1:], "_")
+	costume := strings.Trim(strings.Join([]string{prefix, costumePart}, "_"), "_")
+
+	return &parsedLive2d{
+		CharaID:     charaID,
+		CostumePart: costumePart,
+		Costume:     costume,
+	}, true
+}
+
 // loadCharacterList 加载角色列表并发送到 TUI.
 func (a *App) loadCharacterList() {
 	charaList, err := a.apiClient.GetCharacterInfoList(a.ctx)
@@ -188,45 +228,19 @@ func (a *App) loadCharacterList() {
 
 // getLive2dPath 根据 Live2D 名称获取保存路径.
 func (a *App) getLive2dPath(live2dName string) (string, error) {
-	parts := strings.Split(live2dName, "_")
-	if len(parts) == 0 {
+	parsed, ok := parseLive2dName(live2dName)
+	if !ok {
 		log.DefaultLogger.Error().Str("live2dName", live2dName).Msg("无效的Live2D名称格式")
 		return "", errors.New("无效的Live2D名称格式")
 	}
 
-	// 找到第一个可解析的角色ID位置
-	foundIdx := -1
-	var charaID int
-	for i, p := range parts {
-		id, err := strconv.Atoi(p)
-		if err == nil {
-			foundIdx = i
-			charaID = id
-			break
-		}
-	}
-	if foundIdx == -1 {
-		log.DefaultLogger.Error().Str("live2dName", live2dName).Msg("未找到可解析为数字的角色ID")
-		return "", errors.New("无效的角色ID: 未找到可解析为数字的部分")
-	}
-
-	// 角色ID 后必须还有服装部分
-	if foundIdx >= len(parts)-1 {
-		log.DefaultLogger.Error().Str("live2dName", live2dName).Msg("无效的Live2D名称格式: 缺少服装部分")
-		return "", errors.New("无效的Live2D名称格式: 缺少服装部分")
-	}
-
-	prefix := strings.Join(parts[:foundIdx], "_")        // 可能为空
-	costumePart := strings.Join(parts[foundIdx+1:], "_") // 服装部分
-	costume := strings.Trim(strings.Join([]string{prefix, costumePart}, "_"), "_")
-
 	// 使用中文命名模式
 	if a.tuiModel.NamingMode == config.NamingModeChinese {
-		return a.getLive2dPathChinese(live2dName, charaID, costume)
+		return a.getLive2dPathChinese(live2dName, parsed.CharaID, parsed.Costume)
 	}
 
 	// 原始命名模式
-	return a.getLive2dPathOriginal(live2dName, charaID, costume, costumePart)
+	return a.getLive2dPathOriginal(live2dName, parsed.CharaID, parsed.Costume, parsed.CostumePart)
 }
 
 // getLive2dPathChinese 使用中文命名获取保存路径.
@@ -296,7 +310,7 @@ func (a *App) getLive2dPathOriginal(_ string, charaID int, costume string, costu
 
 // findExistingModelPath 查找已存在的模型目录（支持不同命名模式）
 //
-//nolint:gocognit,funlen // 复杂的路径查找逻辑
+//nolint:gocognit // 复杂的路径查找逻辑
 func (a *App) findExistingModelPath(live2dName string, currentPath string) (string, bool) {
 	// 检查当前路径是否存在完整模型
 	if _, err := os.Stat(filepath.Join(currentPath, "model.json")); err == nil {
@@ -304,40 +318,22 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 	}
 
 	// 尝试查找其他命名模式下的路径
-	parts := strings.Split(live2dName, "_")
-	if len(parts) < 2 {
+	parsed, ok := parseLive2dName(live2dName)
+	if !ok {
 		return "", false
 	}
-
-	foundIdx := -1
-	var charaID int
-	for i, p := range parts {
-		id, err := strconv.Atoi(p)
-		if err == nil {
-			foundIdx = i
-			charaID = id
-			break
-		}
-	}
-	if foundIdx == -1 || foundIdx >= len(parts)-1 {
-		return "", false
-	}
-
-	prefix := strings.Join(parts[:foundIdx], "_")
-	costumePart := strings.Join(parts[foundIdx+1:], "_")
-	costume := strings.Trim(strings.Join([]string{prefix, costumePart}, "_"), "_")
 
 	savePath := config.Get().Live2dSavePath
 
 	// 尝试中文命名路径
 	a.loadCharacterNames()
 	a.loadCostumeNames()
-	charaName := fmt.Sprintf("chara_%03d", charaID)
-	if name, ok := a.charaNames[strconv.Itoa(charaID)]; ok && name != "" {
-		charaName = sanitizeFilename(name)
+	charaName := fmt.Sprintf("chara_%03d", parsed.CharaID)
+	if charaNameVal, charaNameOk := a.charaNames[strconv.Itoa(parsed.CharaID)]; charaNameOk && charaNameVal != "" {
+		charaName = sanitizeFilename(charaNameVal)
 	}
 	// 使用完整的 live2dName 查找中文名（与 getLive2dPathChinese 一致）
-	costumeName := sanitizeFilename(a.lookupCostumeName(live2dName, costume))
+	costumeName := sanitizeFilename(a.lookupCostumeName(live2dName, parsed.Costume))
 	chinesePath := filepath.Join(savePath, charaName, costumeName)
 	if chinesePath != currentPath {
 		if _, err := os.Stat(filepath.Join(chinesePath, "model.json")); err == nil {
@@ -346,10 +342,10 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 	}
 
 	// 尝试原始命名路径（使用角色全名）
-	chara, err := a.apiClient.GetChara(a.ctx, charaID)
+	chara, err := a.apiClient.GetChara(a.ctx, parsed.CharaID)
 	if err == nil { //nolint:nestif // 复杂的路径查找逻辑
-		characterNames, ok := chara["characterName"].([]any)
-		if ok && len(characterNames) >= 4 {
+		characterNames, charaOk := chara["characterName"].([]any)
+		if charaOk && len(characterNames) >= 4 {
 			fallbackName := ""
 			if len(characterNames) > 3 {
 				fallbackName, _ = characterNames[3].(string)
@@ -364,7 +360,11 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 				fallbackName, _ = characterNames[1].(string)
 			}
 			if fallbackName != "" {
-				originalPath := filepath.Join(savePath, sanitizeFilename(fallbackName), sanitizeFilename(costume))
+				originalPath := filepath.Join(
+					savePath,
+					sanitizeFilename(fallbackName),
+					sanitizeFilename(parsed.Costume),
+				)
 				if originalPath != currentPath {
 					if _, statErr := os.Stat(filepath.Join(originalPath, "model.json")); statErr == nil {
 						return originalPath, true
@@ -375,7 +375,7 @@ func (a *App) findExistingModelPath(live2dName string, currentPath string) (stri
 	}
 
 	// 尝试原始命名路径（使用角色ID）
-	idPath := filepath.Join(savePath, fmt.Sprintf("chara_%03d", charaID), sanitizeFilename(costumePart))
+	idPath := filepath.Join(savePath, fmt.Sprintf("chara_%03d", parsed.CharaID), sanitizeFilename(parsed.CostumePart))
 	if idPath != currentPath {
 		if _, statErr := os.Stat(filepath.Join(idPath, "model.json")); statErr == nil {
 			return idPath, true
@@ -441,12 +441,7 @@ func (a *App) downloadLive2d(live2d *model.Live2dAsset, displayName string) erro
 
 // updateProgressComplete 更新进度到 100%（用于已存在模型的情况）.
 func (a *App) updateProgressComplete(displayName string, data *model.BuildData) {
-	// 计算总文件数
-	totalFiles := 1 + // model.moc
-		1 + // physics.json
-		len(data.Textures) +
-		len(data.Motions) +
-		len(data.Expressions)
+	totalFiles := downloader.TotalFilesForBuildData(data)
 
 	// 添加下载项并立即设置为完成
 	a.tuiModel.AddDownloadItem(displayName, totalFiles)
